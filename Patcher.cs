@@ -190,14 +190,14 @@ namespace KenshiPatcher
             var group = new List<ModRecord>();
 
             // --- Step 1: extract first (...) for mod selector ---
-            string modSelector = ExtractParenthesesContent(ref text);
+            string? modSelector = ExtractParenthesesContent(ref text);
             if (modSelector == null)
                 throw new FormatException("Missing mod selector (first parentheses).");
 
             List<ReverseEngineer> targetMods = ParseModSelector(modSelector);
 
             // --- Step 2: extract second (...) for record definition ---
-            string definition = ExtractParenthesesContent(ref text);
+            string? definition = ExtractParenthesesContent(ref text);
             if (definition == null)
                 throw new FormatException($"Faulty record definition (second parentheses): {text}.");
 
@@ -275,7 +275,7 @@ namespace KenshiPatcher
 
             return (resultModNames, resultRecords);
         }*/
-        private string ExtractParenthesesContent(ref string text)
+        private string? ExtractParenthesesContent(ref string text)
         {
             text = text.Trim();
             if (!text.StartsWith("(")) return null;

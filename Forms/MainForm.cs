@@ -14,7 +14,7 @@ namespace KenshiPatcher.Forms
     {
         private Boolean IndexChangeEnabled = true;
         private Dictionary<ModItem, ReverseEngineer> ReverseEngineersCache = new();
-        private Patcher KPatcher;
+        private Patcher? KPatcher;
         private Button PatchButton;
         public MainForm()
         {
@@ -25,7 +25,7 @@ namespace KenshiPatcher.Forms
             setColors(Color.FromArgb(unchecked((int)0xFF2F2A24)), Color.FromArgb(unchecked((int)0xFF4C433A)));
             
             modsListView.SelectedIndexChanged += ModsListView_SelectedIndexChanged;
-            AddColumn("Patch Status", mod => getPatchStatus(mod));
+            AddColumn("Patch Status", mod => getPatchStatus(mod),150);
             PatchButton=AddButton("Patch it!",PatchItClick);
             
         }
@@ -43,7 +43,7 @@ namespace KenshiPatcher.Forms
         }
         private void PatchItClick(object? sender, EventArgs e)
         {
-            KPatcher.runPatch(getSelectedMod().getModFilePath()!);
+            KPatcher!.runPatch(getSelectedMod().getModFilePath()!);
         }
 
         protected override async void OnShown(EventArgs e)

@@ -62,7 +62,7 @@ namespace KenshiPatcher
     class Token
     {
         public TokenType Type;
-        public string Value;
+        public string? Value;
     }
     class Lexer
     {
@@ -179,7 +179,7 @@ namespace KenshiPatcher
 
             if (current.Type == TokenType.Identifier)
             {
-                string funcName = current.Value;
+                string funcName = current.Value!;
                 Eat(TokenType.Identifier);
 
                 if (string.Equals(funcName, "true", StringComparison.OrdinalIgnoreCase))
@@ -188,7 +188,7 @@ namespace KenshiPatcher
                     return new LiteralCondition(false);
 
                 Eat(TokenType.LParen);
-                string arg = current.Value;
+                string arg = current.Value!;
                 Eat(TokenType.String);
                 Eat(TokenType.RParen);
 
