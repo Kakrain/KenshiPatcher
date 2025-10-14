@@ -22,20 +22,20 @@ namespace KenshiPatcher
     {
         string field;
         public FieldIsEmptyOrNotExistCondition(string field) => this.field = field;
-        public override bool Evaluate(ModRecord r) => !r.HasField(field)||string.IsNullOrEmpty(r.GetField(field));
+        public override bool Evaluate(ModRecord r) => !r.HasField(field)||string.IsNullOrEmpty(r.GetFieldAsString(field));
     }
     class FieldIsEmptyAndExistCondition : Condition
     {
         string field;
         public FieldIsEmptyAndExistCondition(string field) => this.field = field;
-        public override bool Evaluate(ModRecord r) => r.HasField(field) && string.IsNullOrEmpty(r.GetField(field));
+        public override bool Evaluate(ModRecord r) => r.HasField(field) && string.IsNullOrEmpty(r.GetFieldAsString(field));
     }
     class FieldIsNotEmptyCondition : Condition
     {
         string field;
         public FieldIsNotEmptyCondition(string field) => this.field = field;
         public override bool Evaluate(ModRecord r) =>
-            r.HasField(field) && !string.IsNullOrEmpty(r.GetField(field));
+            r.HasField(field) && !string.IsNullOrEmpty(r.GetFieldAsString(field));
     }
     class NotCondition : Condition
     {

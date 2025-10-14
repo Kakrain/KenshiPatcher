@@ -13,6 +13,8 @@ obj\
 
 # Visual Studio Code
 .vscode/
+.csproj
+.resx
 
 # Backup & temp files
 *.tmp
@@ -33,3 +35,4 @@ obj/Debug/net9.0-windows/KenshiPatcher.AssemblyInfo.cs
 .vs/KenshiPatcher/FileContentIndex/79230544-2bb3-4aaa-8348-6e82bf13e0f9.vsidx
 .vs/KenshiPatcher/FileContentIndex/3b93653a-7ea1-446d-9618-86c5c8a5686b.vsidx
 .vs/KenshiPatcher/FileContentIndex/0850c7b2-e2aa-4afd-9094-3a1d8663151b.vsidx
+KenshiPatcher.csproj

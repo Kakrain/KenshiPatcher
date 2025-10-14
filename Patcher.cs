@@ -7,15 +7,16 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using static KenshiPatcher.RecordProcedures;
 
 namespace KenshiPatcher
 {
     
     public class Patcher
     {
-        //public delegate bool RecordCondition(ModRecord record);
         private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
         public Dictionary<string, (List<string>,List<ModRecord>)> definitions;
+        public Dictionary<string, Dictionary<string, string>> tables;
         private readonly string _definition = ":=";
         private readonly string _proc = "->";
         private readonly string _comment = ";";
@@ -26,6 +27,7 @@ namespace KenshiPatcher
         {
             _engCache = modCache;
             definitions= new();
+            tables = new();
         }
         private void loadAssumedReqs()
         {
@@ -47,8 +49,15 @@ namespace KenshiPatcher
                 .ToList();
             
         }
+        public void Reset()
+        {
+            definitions.Clear();
+            tables.Clear();
+            currentRE = null;
+        }
         public void runPatch(string path)
         {
+            Reset();
             loadAssumedReqs();
             loadUnPatchedMod(path);
             string dir = Path.GetDirectoryName(path)!;
@@ -71,6 +80,7 @@ namespace KenshiPatcher
                     }
                     else if (line.Contains(_proc))
                     {
+                        FieldExpressionEvaluator.SetTables(tables);
                         ParseProcedure(line);                    
                     }
                     else
@@ -110,11 +120,26 @@ namespace KenshiPatcher
             var def = text.Split(_definition);
             if (def.Length != 2)
                 throw new FormatException($"Invalid patch definition format: '{text}'");
-            definitions.Add(def[0], GetGroup(def[1]));
+
+            string left = def[0].Trim();
+            string right = def[1].Trim();
+            var tableMatch = Regex.Match(left, @"^(\w+)\s*\[\s*([^\]]+)\s*\]$");
+            if (tableMatch.Success)
+            {
+                string tableName = tableMatch.Groups[1].Value;
+                string key = tableMatch.Groups[2].Value.Trim();
+
+                if (!tables.ContainsKey(tableName))
+                    tables[tableName] = new Dictionary<string, string>();
+
+                tables[tableName][key] = right;
+                return; // done, no further processing
+            }
+            definitions.Add(left, GetGroup(right));
         }
         public void ParseProcedure(string text)
         {
-            // Split at the _proc operator
+            // Split at the _proc operator (e.g., "->")
             var procParts = text.Split(_proc, StringSplitOptions.RemoveEmptyEntries);
             if (procParts.Length != 2)
                 throw new FormatException($"Invalid procedure syntax: '{text}'");
@@ -122,35 +147,58 @@ namespace KenshiPatcher
             string targetVar = procParts[0].Trim();
             string procCall = procParts[1].Trim();
 
-            // Parse procedure name and its argument
-            var match = Regex.Match(procCall, @"^(\w+)\(([^,]+)\s*,\s*""([^""]+)""\)$");
+            // Extract procedure name and raw arguments
+            var match = Regex.Match(procCall, @"^(\w+)\((.*)\)$");
             if (!match.Success)
                 throw new FormatException($"Invalid procedure call format: '{procCall}'");
 
             string procName = match.Groups[1].Value;
-            string sourceVar = match.Groups[2].Value.Trim();
-            string category = match.Groups[3].Value.Trim();
+            string rawArgs = match.Groups[2].Value.Trim();
 
-            // Get the procedure function
-            if (!RecordProcedures.Procedures.TryGetValue(procName, out var func))
+            // Lookup procedure
+            if (!RecordProcedures.Procedures.TryGetValue(procName, out var proc))
                 throw new FormatException($"Unknown procedure '{procName}'");
 
-            // Get the ModRecord lists from definitions
+            // Get target records
             if (!definitions.TryGetValue(targetVar, out var targetList))
                 throw new FormatException($"Unknown variable '{targetVar}'");
 
-            if (!definitions.TryGetValue(sourceVar, out var sourceList))
-                throw new FormatException($"Unknown variable '{sourceVar}'");
-
-            foreach(ModRecord t in targetList.Item2)
+            // Dispatch based on procedure signature
+            switch (proc.Signature)
             {
-                foreach(ModRecord s in sourceList.Item2)
-                {
-                    func(currentRE!, t, s, category);
-                }
+                case ProcSignature.TargetAndSource:
+                    {
+                        // Old-style: target + source + category
+                        var parts = rawArgs.Split(',', 2);
+                        if (parts.Length != 2)
+                            throw new FormatException($"Invalid arguments for {procName}: {rawArgs}");
+
+                        string sourceVar = parts[0].Trim();
+                        string category = parts[1].Trim().Trim('"');
+
+                        if (!definitions.TryGetValue(sourceVar, out var sourceList))
+                            throw new FormatException($"Unknown variable '{sourceVar}'");
+
+                        foreach (var t in targetList.Item2)
+                            foreach (var s in sourceList.Item2)
+                                proc.Func(currentRE!, t, s, category);
+
+                        currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+                        break;
+                    }
+                case ProcSignature.TargetAndString:
+                    {
+                        foreach (var t in targetList.Item2) { 
+                            proc.Func(currentRE!, t, t, rawArgs);
+                        }
+                        break;
+                    }
+                default:
+                    throw new NotImplementedException($"Unhandled procedure signature: {proc.Signature}");
             }
+
+            // Track dependencies of targets
             currentRE!.addDependencies(targetList.Item1.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
-            currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
         {
@@ -260,21 +308,6 @@ namespace KenshiPatcher
 
             return (resultModNames, resultRecords);
         }
-        /*private (List<string>,List<ModRecord>) FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModName)> records)
-        {
-            var resultModNames = new List<string>();
-            var resultRecords = new List<ModRecord>();
-
-            foreach (var group in records.GroupBy(x => x.record.StringId))
-            {
-                var recs = group.ToList();
-                var preferred = recs.Cast<(ModRecord record, string sourceModName)?>().FirstOrDefault(x => string.Equals(x?.sourceModName, x?.record.GetModName(), StringComparison.OrdinalIgnoreCase)) ?? recs.Last(); // fallback: last one
-                resultRecords.Add(preferred.record);
-                resultModNames.Add(preferred.sourceModName);
-            }
-
-            return (resultModNames, resultRecords);
-        }*/
         private string? ExtractParenthesesContent(ref string text)
         {
             text = text.Trim();
