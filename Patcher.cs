@@ -8,12 +8,25 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using static KenshiPatcher.RecordProcedures;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+using KenshiPatcher.ExpressionReader;
 
 namespace KenshiPatcher
 {
     
     public class Patcher
     {
+
+        private static Patcher? _instance;
+        public static Patcher Instance
+        {
+            get
+            {
+                if (_instance == null)
+                    throw new InvalidOperationException("Patcher instance has not been initialized.");
+                return _instance;
+            }
+        }
         private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
         public Dictionary<string, (List<string>,List<ModRecord>)> definitions;
         public Dictionary<string, Dictionary<string, string>> tables;
@@ -28,6 +41,7 @@ namespace KenshiPatcher
             _engCache = modCache;
             definitions= new();
             tables = new();
+            _instance = this;
         }
         private void loadAssumedReqs()
         {
@@ -65,22 +79,25 @@ namespace KenshiPatcher
             string patchPath = Path.Combine(dir, modName + ".patch");
             var lines = File.ReadAllLines(patchPath);
             int lineNumber = 0;
-
-            foreach (string rawLine in lines)
+            CoreUtils.StartLog(modName, dir);
+            try
             {
-                lineNumber++;
-                string line = rawLine.Trim();
-                if (string.IsNullOrWhiteSpace(line) || line.StartsWith(_comment))
-                    continue;
-                try
+                foreach (string rawLine in lines)
                 {
+                    lineNumber++;
+                    string line = rawLine.Trim();
+                    int commentIndex = line.IndexOf(_comment);
+                    if (commentIndex >= 0)
+                        line = line.Substring(0, commentIndex).Trim();
+
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
                     if (line.Contains(_definition))
                     {
                         ParseDefinition(line);
                     }
                     else if (line.Contains(_proc))
                     {
-                        FieldExpressionEvaluator.SetTables(tables);
                         ParseProcedure(line);                    
                     }
                     else
@@ -88,14 +105,17 @@ namespace KenshiPatcher
                         throw new FormatException($"Unrecognized syntax at line {lineNumber}: {line}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Error in patch at line {lineNumber}:\n{line}\n{ex.Message}",
-                        "Patch Load Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                savePatchedMod(path);
+                MessageBox.Show($"{modName} patched!");
             }
-            savePatchedMod(path);
-            MessageBox.Show($"{modName} patched!");
+            catch (Exception ex)
+            {
+                CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
+            }
+            finally
+            {
+                CoreUtils.EndLog("Patch execution summary saved.");
+            }
         }
        
         private void loadUnPatchedMod(string path)
@@ -145,7 +165,7 @@ namespace KenshiPatcher
                 throw new FormatException($"Invalid procedure syntax: '{text}'");
 
             string targetVar = procParts[0].Trim();
-            string procCall = procParts[1].Trim();
+            string procCall = procParts[1].Trim(); // e.g., SetField(...)
 
             // Extract procedure name and raw arguments
             var match = Regex.Match(procCall, @"^(\w+)\((.*)\)$");
@@ -163,18 +183,18 @@ namespace KenshiPatcher
             if (!definitions.TryGetValue(targetVar, out var targetList))
                 throw new FormatException($"Unknown variable '{targetVar}'");
 
-            // Dispatch based on procedure signature
+            // Split arguments respecting parentheses
+            var argParts = SplitArgs(rawArgs);
+
             switch (proc.Signature)
             {
                 case ProcSignature.TargetAndSource:
                     {
-                        // Old-style: target + source + category
-                        var parts = rawArgs.Split(',', 2);
-                        if (parts.Length != 2)
+                        if (argParts.Length != 2)
                             throw new FormatException($"Invalid arguments for {procName}: {rawArgs}");
 
-                        string sourceVar = parts[0].Trim();
-                        string category = parts[1].Trim().Trim('"');
+                        string sourceVar = argParts[0].Trim();
+                        string category = argParts[1].Trim().Trim('"');
 
                         if (!definitions.TryGetValue(sourceVar, out var sourceList))
                             throw new FormatException($"Unknown variable '{sourceVar}'");
@@ -183,33 +203,75 @@ namespace KenshiPatcher
                             foreach (var s in sourceList.Item2)
                                 proc.Func(currentRE!, t, s, category);
 
-                        currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+                        currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.Ordinal).ToList());
                         break;
                     }
+
                 case ProcSignature.TargetAndString:
                     {
-                        foreach (var t in targetList.Item2) { 
-                            proc.Func(currentRE!, t, t, rawArgs);
+                        // Example: SetField("field name", expression)
+                        if (argParts.Length != 2)
+                            throw new FormatException($"Invalid arguments for {procName}: {rawArgs}");
+
+                        string fieldName = argParts[0].Trim().Trim('"');
+                        string exprText = argParts[1].Trim();
+
+                        // Parse expression using your Parser
+                        var parser = new Parser(exprText);
+                        CoreUtils.Print("Parsing expression: " + exprText);
+                        var exprFunc = parser.ParseValueExpression();
+                        foreach (var t in targetList.Item2)
+                        {
+                            var value = exprFunc(t);
+                            //CoreUtils.Print($"Record: cut_into_stun={t.GetFieldAsString("cut into stun")}, cut_def_bonus={t.GetFieldAsString("cut def bonus")}, level_bonus={t.GetFieldAsString("level bonus")}, material_type={t.GetFieldAsString("material type")}, class={t.GetFieldAsString("class")}");
+                            proc.Func(currentRE!, t, t, $"\"{fieldName}\"{RecordProcedures.sep}{Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)}");
                         }
                         break;
                     }
+
                 default:
                     throw new NotImplementedException($"Unhandled procedure signature: {proc.Signature}");
             }
+            CoreUtils.Print($"dependencies: { string.Join(",",targetList.Item1.Distinct(StringComparer.Ordinal).ToList())}");
+            currentRE!.addDependencies(targetList.Item1.Distinct(StringComparer.Ordinal).ToList());
+        }
 
-            // Track dependencies of targets
-            currentRE!.addDependencies(targetList.Item1.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+        // Helper to split procedure arguments while respecting nested parentheses
+        private string[] SplitArgs(string input)
+        {
+            var args = new List<string>();
+            int parenLevel = 0;
+            int lastSplit = 0;
+
+            for (int i = 0; i < input.Length; i++)
+            {
+                char c = input[i];
+                if (c == '(') parenLevel++;
+                else if (c == ')') parenLevel--;
+                else if (c == ',' && parenLevel == 0)
+                {
+                    args.Add(input.Substring(lastSplit, i - lastSplit).Trim());
+                    lastSplit = i + 1;
+                }
+            }
+
+            // Add last argument
+            if (lastSplit < input.Length)
+                args.Add(input.Substring(lastSplit).Trim());
+
+            return args.ToArray();
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
         {
-            if (selector.Equals("all", StringComparison.OrdinalIgnoreCase))
+            if (selector.Equals("all", StringComparison.Ordinal))
                 return _engCache.Values.ToList(); // all mods loaded
             var result = new List<ReverseEngineer>();
-            var names = selector
-            .Split(',', StringSplitOptions.RemoveEmptyEntries)
-            .Select(s => s.Trim())
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
+            // Use the shared helper to split safely
+            var names = CoreUtils.SplitModList(selector)
+                .ToHashSet(StringComparer.Ordinal);
+            //foreach ( var name in names) { 
+            //    MessageBox.Show("Mod in selector: " + name);
+           // }
             foreach (var kvp in _engCache)
             {
                 var modItem = kvp.Key;
@@ -252,58 +314,69 @@ namespace KenshiPatcher
             // --- Step 3: parse record definition ---
             var (mode, recordType, condition) = ParseRecordDefinition(definition);
 
-            // --- Step 4: parse condition ---
+            // --- Step 4: collect records based on condition ---
             var parser = new Parser(condition);
-            Condition cond = parser.ParseExpression();
-            Func<ModRecord, bool> predicate = r => cond.Evaluate(r);
-
-
+            CoreUtils.Print("Parsing condition: " + condition);
+            var cond = parser.ParseValueExpression();
+            Func<ModRecord, bool> predicate = r=>(bool)cond(r);
 
             var collected = new List<(ModRecord record, string sourceModName)>();
 
             foreach (var re in targetMods)
             {
                 string modName = re.modname;
-                var matches = re.GetRecordsByTypeINMUTABLE(recordType)
-                                .Where(r => r.isNew() && predicate(r))
+                var records = re.GetRecordsByTypeINMUTABLE(recordType)
                                 .Select(r => (r, modName));
 
-                collected.AddRange(matches);
+                collected.AddRange(records);
             }
-            return FilterUniqueRecordsByPreference(collected);
+            var (modNames, mergedRecords) = FilterUniqueRecordsByPreference(collected);
+            var finalModNames = new List<string>();
+            var finalRecords = new List<ModRecord>();
+
+            for (int i = 0; i < mergedRecords.Count; i++)
+            {
+                var rec = mergedRecords[i];
+                if (predicate(rec))
+                {
+                    finalRecords.Add(rec);
+                    finalModNames.Add(modNames[i]);
+                }
+            }
+            return (finalModNames, finalRecords);
         }
-        private (List<string> modNames, List<ModRecord> records)
-    FilterUniqueRecordsByPreference(
-        IEnumerable<(ModRecord record, string sourceModName)> records)
+private (List<string> modNames, List<ModRecord> records)
+FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModName)> records)
         {
             var resultModNames = new List<string>();
             var resultRecords = new List<ModRecord>();
 
             foreach (var group in records.GroupBy(x => x.record.StringId))
             {
-                var recs = group.ToList();
+                var recList = group.ToList();
 
-                // 1️ Prefer: record.GetModName() is in assumedReqs
-                var preferred = recs.FirstOrDefault(x =>
-                    assumedReqs!.Contains(x.record.GetModName(), StringComparer.OrdinalIgnoreCase)//OrdinalIgnoreCase
-                );
+                // --- Pass 1: find first "new" record and deep clone it ---
+                var creatorPair = recList.FirstOrDefault(x => x.record.isNew());
 
-                // 2️ Next: sourceModName == record's mod name
-                if (preferred.Equals(default((ModRecord, string))))
+                ModRecord merged;
+                string creatorMod;
+
+                if (creatorPair != default)
                 {
-                    preferred = recs.FirstOrDefault(x =>
-                        string.Equals(x.sourceModName, x.record.GetModName(), StringComparison.OrdinalIgnoreCase)//OrdinalIgnoreCase
-                    );
+                    merged = creatorPair.record.deepClone();
+                    creatorMod = creatorPair.sourceModName;
+                    foreach (var (record, _) in recList)
+                    {
+                        if (!object.ReferenceEquals(record, merged))
+                            merged.applyChangesFrom(record);
+                    }
+                    resultRecords.Add(merged);
+                    resultModNames.Add(creatorMod);
                 }
-
-                // 3️ Fallback: last record (latest override)
-                if (preferred.Equals(default((ModRecord, string))))
+                else
                 {
-                    preferred = recs.Last();
+                    CoreUtils.Print($"not found:{recList.ToArray()[0].record.StringId}");
                 }
-
-                resultRecords.Add(preferred.record);
-                resultModNames.Add(preferred.sourceModName);
             }
 
             return (resultModNames, resultRecords);

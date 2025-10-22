@@ -1,3 +1,4 @@
+using KenshiCore;
 using KenshiPatcher.Forms;
 
 namespace KenshiPatcher;

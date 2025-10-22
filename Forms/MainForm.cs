@@ -98,21 +98,28 @@ namespace KenshiPatcher.Forms
             re.LoadModFile(selectedMod.getModFilePath()!);
             //List<(string Text, Color Color)> bs = re.ValidateAllDataAsBlocks();
             //List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(1,"ARMOUR", new List<string> { "cut into stun", "material type", "cut def bonus","class","level bonus","pierce def mult" });
-            //List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(1);
             List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(-1);
-            /*List<(string Text, Color Color)> bs=new List<(string Text, Color Color)>();
-            foreach (var mod in ReverseEngineersCache.Keys)
+            //List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(1);
+            //List<(string Text, Color Color)> bs=new List<(string Text, Color Color)>();
+            /*foreach (var mod in ReverseEngineersCache.Keys)
             {
                 if (string.Equals("No Cut Efficiency.mod", mod.Name, StringComparison.Ordinal))//"gamedata.base",BBGoatsBeastforge.mod
                 {
                     if (ReverseEngineersCache.TryGetValue(mod, out var rebase))
-                        bs = re.CompareWith(rebase, "ARMOUR", new List<string> { "cut into stun", "material type", "cut def bonus", "class", "level bonus", "pierce def mult" });
+                        bs = re.CompareWith(rebase, "ARMOUR", new List<string> { "cut into stun", "slot" });
                 }
             }*/
-
-
-
-
+            List<string> notfounddeps = new();
+            foreach(string d in re.getDependencies())
+            {
+                mergedMods.TryGetValue(d, out var m);
+                if (m== null)
+                {
+                    notfounddeps.Add(d);
+                }
+            }
+            bs.Add(("not found Dependencies: " + (notfounddeps.Count==0 ? "none" : string.Join("|", notfounddeps)), Color.Red));
+            
             InitializeProgress(0, bs.Count);
             logform.LogBlocks(bs, (done, label) => ReportProgress(done, label));
 

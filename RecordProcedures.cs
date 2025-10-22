@@ -1,6 +1,7 @@
 ﻿using KenshiCore;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Text;
@@ -11,6 +12,7 @@ namespace KenshiPatcher
 {
     public static class RecordProcedures
     {
+        public static readonly string sep = "|";
         public enum ProcSignature
         {
             TargetAndSource,
@@ -26,22 +28,24 @@ namespace KenshiPatcher
             { "AddExtraData", new Procedure { Signature = ProcSignature.TargetAndSource, Func = (re, t, s, c) => re.AddExtraData(t, s, c) } },
             { "SetField", new Procedure { Signature = ProcSignature.TargetAndString, Func = (re, t, s, arg) => {
                 var parts = ParseFieldArg(arg);
-                object result = FieldExpressionEvaluator.Evaluate(parts[1], t);
-                string valueStr = Convert.ToString(result, System.Globalization.CultureInfo.InvariantCulture) ?? "";
-                re.SetField(t, parts[0], valueStr);
+                re.SetField(t, parts[0], parts[1]);
             } } }
-        };    //{ "SetField", new Procedure { Signature = ProcSignature.TargetAndString, Func = (re, t, s, arg) => {var parts = ParseFieldArg(arg); re.SetField(t, parts[0], parts[1]);}}}};
+        };
         private static string[] ParseFieldArg(string arg)
         {
-            // Expect syntax: "fieldName",value
-            // Match quoted field name and then value
-            var match = Regex.Match(arg, @"^""([^""]+)""\s*,\s*(.+)$");
-            if (!match.Success)
-                throw new FormatException($"Invalid SetField argument: {arg}");
+            // Pattern: match either "quoted text" or unquoted text between separators
+            string pattern = $@"(?:(?:""([^""]*)"")|([^{sep}]+))";
 
-            string fieldName = match.Groups[1].Value.Trim();
-            string value = match.Groups[2].Value.Trim();
-            return new string[] { fieldName, value };
+            var matches = Regex.Matches(arg, pattern);
+            var results = new List<string>();
+
+            foreach (Match match in matches)
+            {
+                string value = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+                results.Add(value.Trim());
+            }
+
+            return results.ToArray();
         }
     }
 }
