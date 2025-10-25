@@ -31,7 +31,19 @@ class Parser
     }
     public IExpression<object> ParseExpression(int minPrecedence = 0)
     {
-        var left = ParsePrimary();
+        IExpression<object> left;
+
+        if (current.Type == TokenType.Operator && (current.OriginalText == "-" || current.OriginalText == "!"))
+        {
+            string op = current.OriginalText;
+            Eat(TokenType.Operator);
+            var operand = ParseExpression(7); // Unary has higher precedence than any binary (6)
+            left = new UnaryExpression(operand, op);
+        }
+        else
+        {
+            left = ParsePrimary();
+        }
 
         while (true)
         {
@@ -39,30 +51,17 @@ class Parser
             if (currentToken.Type != TokenType.Operator) break;
 
             var op = currentToken.OriginalText;
-            if (!_precedence.TryGetValue(op, out int opPrecedence))
+            if (!_precedence.TryGetValue(op!, out int opPrecedence))
                 break;
 
             if (opPrecedence < minPrecedence) break;
 
             Eat(TokenType.Operator);
             var right = ParseExpression(opPrecedence + 1);
-            left = new BinaryExpression(left, right, op);
+            left = new BinaryExpression(left, right, op!);
         }
 
         return left;
-    }
-    private IExpression<object> ParseUnary()
-    {
-        if (current.Type == TokenType.Operator &&
-            (current.OriginalText == "-" || current.OriginalText == "!"))
-        {
-            string op = current.OriginalText;
-            Eat(TokenType.Operator);
-            var inner = ParseUnary();
-            return new UnaryExpression(inner, op);
-        }
-
-        return ParsePrimary();
     }
 
     private IExpression<object> ParsePrimary()
@@ -71,33 +70,32 @@ class Parser
         switch (current.Type)
         {
             case TokenType.IntLiteral:
-                int intVal = int.Parse(current.OriginalText, System.Globalization.CultureInfo.InvariantCulture);
+                int intVal = int.Parse(current.OriginalText!, System.Globalization.CultureInfo.InvariantCulture);
                 Eat(TokenType.IntLiteral);
                 expr= new ObjectExpression<int>(new Literal<int>(intVal));
                 break;
 
             case TokenType.DoubleLiteral:
-                double doubleVal = double.Parse(current.OriginalText, System.Globalization.CultureInfo.InvariantCulture);
+                double doubleVal = double.Parse(current.OriginalText!, System.Globalization.CultureInfo.InvariantCulture);
                 Eat(TokenType.DoubleLiteral);
                 expr = new ObjectExpression<double>(new Literal<double>(doubleVal));
                 break;
 
             case TokenType.StringLiteral:
-                string str = current.OriginalText;
+                string str = current.OriginalText!;
                 Eat(TokenType.StringLiteral);
                 expr = new ObjectExpression<string>(new Literal<string>(str)); 
                 break;
 
             case TokenType.BoolLiteral:
-                bool boolVal = bool.Parse(current.OriginalText);
+                bool boolVal = bool.Parse(current.OriginalText!);
                 Eat(TokenType.BoolLiteral);
                 expr = new ObjectExpression<bool>(new Literal<bool>(boolVal));
                 break;
             case TokenType.Identifier:
                 {
-                    string name = current.OriginalText;
+                    string name = current.OriginalText!;
                     Eat(TokenType.Identifier);
-
 
                     if (current.Type == TokenType.LBracket)
                         expr = new TableNameExpression(name);  // table name literal

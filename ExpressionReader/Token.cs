@@ -25,9 +25,7 @@ namespace KenshiPatcher.ExpressionReader
     public class Token
     {
         public TokenType Type;
-        public string OriginalText;         // the original text
+        public string? OriginalText;         // the original text
         public object? LiteralValue; // parsed number, bool, or string
-        private int pos = 0;
-        private List<Token> peekBuffer = new List<Token>();
     }
 }

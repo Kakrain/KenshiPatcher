@@ -1,14 +1,11 @@
 ﻿using KenshiCore;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using static KenshiPatcher.RecordProcedures;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 using KenshiPatcher.ExpressionReader;
 
 namespace KenshiPatcher
@@ -28,20 +25,41 @@ namespace KenshiPatcher
             }
         }
         private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
-        public Dictionary<string, (List<string>,List<ModRecord>)> definitions;
-        public Dictionary<string, Dictionary<string, string>> tables;
+        public Dictionary<string, IExpression<object>> definitions=new();
+        public Dictionary<string, Dictionary<string, IExpression<object>>> tables = new();
         private readonly string _definition = ":=";
         private readonly string _proc = "->";
         private readonly string _comment = ";";
+        private readonly string _extraction = "<<<";
         private readonly List<string> basemods = new() { "gamedata.base", "rebirth.mod","Newwworld.mod","Dialogue.mod" };
         private List<string>? assumedReqs = null;
         public ReverseEngineer? currentRE;
+        private static readonly Regex GroupPattern = new Regex(@"^\((?<mods>[\w.,*]+)\)\((?<body>[^)]*\|.*)\)$", RegexOptions.Compiled);
+        private bool definitions_printed = false;
         public Patcher(Dictionary<ModItem, ReverseEngineer> modCache)
         {
             _engCache = modCache;
             definitions= new();
             tables = new();
             _instance = this;
+        }
+        public bool TryResolve(string name, out IExpression<object>? expr)
+        {
+            if (definitions.TryGetValue(name, out expr))
+                return true;
+
+            if (tables.TryGetValue(name, out var table))
+            {
+                expr = new Literal<object>(table);
+                return true;
+            }
+
+            expr = null!;
+            return false;
+        }
+        public void Define(string name, IExpression<object> expr)
+        {
+            definitions[name] = expr;
         }
         private void loadAssumedReqs()
         {
@@ -78,46 +96,104 @@ namespace KenshiPatcher
             string modName = Path.GetFileNameWithoutExtension(path);
             string patchPath = Path.Combine(dir, modName + ".patch");
             var lines = File.ReadAllLines(patchPath);
-            int lineNumber = 0;
             CoreUtils.StartLog(modName, dir);
             try
             {
-                foreach (string rawLine in lines)
-                {
-                    lineNumber++;
-                    string line = rawLine.Trim();
-                    int commentIndex = line.IndexOf(_comment);
-                    if (commentIndex >= 0)
-                        line = line.Substring(0, commentIndex).Trim();
-
-                    if (string.IsNullOrWhiteSpace(line))
-                        continue;
-                    if (line.Contains(_definition))
-                    {
-                        ParseDefinition(line);
-                    }
-                    else if (line.Contains(_proc))
-                    {
-                        ParseProcedure(line);                    
-                    }
-                    else
-                    {
-                        throw new FormatException($"Unrecognized syntax at line {lineNumber}: {line}");
-                    }
-                }
+                ProcessPatchLines(lines);
                 savePatchedMod(path);
                 MessageBox.Show($"{modName} patched!");
             }
             catch (Exception ex)
             {
-                CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
+                HandlePatchError(ex);
+                //CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
             }
             finally
             {
                 CoreUtils.EndLog("Patch execution summary saved.");
             }
         }
-       
+        private void printAllDefinitions()
+        {
+            if (definitions_printed)
+                return;
+            definitions_printed = true;
+            foreach (var def in definitions)
+            {
+                var expr = def.Value;
+                var func = expr.GetFunc();
+                var result = func(null); // or some context ModRecord
+
+                if (result is ValueTuple<List<string>, List<ModRecord>> group)
+                {
+                    CoreUtils.Print($"Definition: {def.Key} has this many records: {group.Item2.Count}");
+                }
+                else
+                {
+                    CoreUtils.Print($"Definition: {def.Key} = {result}");
+                }
+            }
+        }
+        private void ProcessPatchLines(IEnumerable<string> lines)
+        {
+            int lineNumber = 0;
+            foreach (string rawLine in lines)
+            {
+                lineNumber++;
+                string line = CleanLine(rawLine);
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                ProcessPatchLine(line, lineNumber);
+            }
+        }
+        private string CleanLine(string rawLine)
+        {
+            string line = rawLine.Trim();
+            int commentIndex = line.IndexOf(_comment);
+            if (commentIndex >= 0)
+                line = line.Substring(0, commentIndex).Trim();
+            return line;
+        }
+        private void ProcessPatchLine(string line, int lineNumber)
+        {
+            if (line.Contains(_definition))
+                ParseDefinition(line);
+            else if (line.Contains(_extraction))
+                ParseExtraction(line);
+            else if (line.Contains(_proc)) { 
+                printAllDefinitions();
+                ParseProcedure(line);
+                }
+            else
+                throw new FormatException($"Unrecognized syntax at line {lineNumber}: {line}");
+        }
+        private void HandlePatchError(Exception ex)
+        {
+            CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
+        }
+        private void TrySetValue(string left, IExpression<object> expr)
+        {
+            // Detect if left side looks like table[index]
+            var match = Regex.Match(left, @"^(\w+)\s*\[\s*([^\]]+)\s*\]$");
+            if (match.Success)
+            {
+                string tableName = match.Groups[1].Value;
+                string key = match.Groups[2].Value.Trim();
+
+                if (!tables.TryGetValue(tableName, out var table))
+                {
+                    table = new Dictionary<string, IExpression<object>>();
+                    tables[tableName] = table;
+                }
+
+                table[key] = expr;
+                CoreUtils.Print($"[TrySetValue] Stored expression in table '{tableName}[{key}]'");
+                return;
+            }
+            definitions[left] = expr;
+            CoreUtils.Print($"[TrySetValue] Stored expression in definitions['{left}']");
+        }
         private void loadUnPatchedMod(string path)
         {
             if (!File.Exists(path))
@@ -143,99 +219,195 @@ namespace KenshiPatcher
 
             string left = def[0].Trim();
             string right = def[1].Trim();
-            var tableMatch = Regex.Match(left, @"^(\w+)\s*\[\s*([^\]]+)\s*\]$");
-            if (tableMatch.Success)
+
+            TrySetValue(left, ParseExpression(right));
+        }
+        public static IExpression<object> ParseExpression(string text)
+        {
+            text = text.Trim();
+
+            // 1. Check for record-group using regex
+            var match = GroupPattern.Match(text);
+            if (match.Success)
             {
-                string tableName = tableMatch.Groups[1].Value;
-                string key = tableMatch.Groups[2].Value.Trim();
-
-                if (!tables.ContainsKey(tableName))
-                    tables[tableName] = new Dictionary<string, string>();
-
-                tables[tableName][key] = right;
-                return; // done, no further processing
+                var group = Patcher.Instance.GetGroup(text);
+                return new RecordGroupExpression(group);
             }
-            definitions.Add(left, GetGroup(right));
+
+            // 2. Check for string literal
+            if (text.StartsWith("\"") && text.EndsWith("\"") && text.Length >= 2)
+            {
+                return new Literal<object>(text.Substring(1, text.Length - 2));
+            }
+
+            // 3. Numeric literal
+            if (double.TryParse(text, System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var dval))
+                return new Literal<object>(dval);
+            if (long.TryParse(text, System.Globalization.NumberStyles.Integer,
+                                System.Globalization.CultureInfo.InvariantCulture, out var lval))
+                return new Literal<object>(lval);
+
+            // 4. Table index: table[index]
+            int bracket = text.IndexOf('[');
+            if (bracket > 0 && text.EndsWith("]"))
+            {
+                string tableName = text.Substring(0, bracket).Trim();
+                string indexText = text.Substring(bracket + 1, text.Length - bracket - 2).Trim();
+                IExpression<object> tableExpr = new IndexExpression.TableNameExpression(tableName);
+                IExpression<object> indexExpr = ParseExpression(indexText);
+                return new IndexExpression(tableExpr, indexExpr);
+            }
+
+            // 5. Default: treat as variable reference
+            return new VariableExpression(text);
+        }
+
+        public void ParseExtraction(string text)
+        {
+            var def = text.Split(_extraction);
+            if (def.Length != 2)
+                throw new FormatException($"Invalid extraction definition format: '{text}'");
+
+            string left = def[0].Trim();  // new definition name
+            string right = def[1].Trim();
+
+            TrySetValue(left, GetExtraction(right));
+        }
+        public RecordGroupExpression GetExtraction(string text)
+        {
+            // Expecting text like: (oldGroup|condition)
+            var match = Regex.Match(text, @"^\s*\(\s*(?<source>[A-Za-z0-9_]+)\s*\|\s*(?<condition>.+?)\s*\)\s*$");
+            if (!match.Success)
+                throw new FormatException($"Invalid extraction syntax: '{text}'");
+
+            string oldDefinitionSource = match.Groups["source"].Value;
+            string condition = match.Groups["condition"].Value;
+
+            // Make sure the source definition exists
+            if (!definitions.TryGetValue(oldDefinitionSource, out var expr))
+                throw new InvalidOperationException($"Unknown source definition '{oldDefinitionSource}'.");
+
+            // Get the actual (names, records)
+            var func = expr.GetFunc();
+            var (modNames, modRecords) = ((List<string>, List<ModRecord>))func(null);
+
+            // Parse the condition
+            CoreUtils.Print($"Parsing extraction condition: {condition}");
+            var parser = new Parser(condition);
+            var cond = parser.ParseValueExpression();
+            Func<ModRecord, bool> predicate = r => (bool)cond(r);
+
+            // Perform extraction
+            var extractedNames = new List<string>();
+            var extractedRecords = new List<ModRecord>();
+            var indexesToRemove = new List<int>();
+
+            for (int i = 0; i < modRecords.Count; i++)
+            {
+                if (predicate(modRecords[i]))
+                {
+                    extractedRecords.Add(modRecords[i]);
+                    extractedNames.Add(modNames[i]);
+                    indexesToRemove.Add(i);
+                }
+            }
+
+            // Remove from source (reverse order)
+            for (int i = indexesToRemove.Count - 1; i >= 0; i--)
+            {
+                modRecords.RemoveAt(indexesToRemove[i]);
+                modNames.RemoveAt(indexesToRemove[i]);
+            }
+
+            // Update source definition
+            definitions[oldDefinitionSource] = new RecordGroupExpression((modNames, modRecords));
+
+            // Return the new group
+            return new RecordGroupExpression((extractedNames, extractedRecords));
         }
         public void ParseProcedure(string text)
         {
-            // Split at the _proc operator (e.g., "->")
+            var (targetVar, procName, rawArgs) = ParseProcedureHeader(text);
+            var proc = GetProcedure(procName);
+            var targetList = GetRecordDefinition(targetVar);
+            var argParts = SplitArgs(rawArgs);
+            CoreUtils.Print($"Parsing procedure: {text}");
+            ExecuteProcedure(proc, targetList, argParts);
+        }
+        private (string targetVar, string procName, string rawArgs) ParseProcedureHeader(string text)
+        {
             var procParts = text.Split(_proc, StringSplitOptions.RemoveEmptyEntries);
             if (procParts.Length != 2)
                 throw new FormatException($"Invalid procedure syntax: '{text}'");
 
             string targetVar = procParts[0].Trim();
-            string procCall = procParts[1].Trim(); // e.g., SetField(...)
-
-            // Extract procedure name and raw arguments
-            var match = Regex.Match(procCall, @"^(\w+)\((.*)\)$");
+            var match = Regex.Match(procParts[1].Trim(), @"^(\w+)\((.*)\)$");
             if (!match.Success)
-                throw new FormatException($"Invalid procedure call format: '{procCall}'");
+                throw new FormatException($"Invalid procedure call format: '{procParts[1]}'");
 
-            string procName = match.Groups[1].Value;
-            string rawArgs = match.Groups[2].Value.Trim();
-
-            // Lookup procedure
-            if (!RecordProcedures.Procedures.TryGetValue(procName, out var proc))
-                throw new FormatException($"Unknown procedure '{procName}'");
-
-            // Get target records
-            if (!definitions.TryGetValue(targetVar, out var targetList))
-                throw new FormatException($"Unknown variable '{targetVar}'");
-
-            // Split arguments respecting parentheses
-            var argParts = SplitArgs(rawArgs);
-
+            return (targetVar, match.Groups[1].Value, match.Groups[2].Value.Trim());
+        }
+        private Procedure GetProcedure(string name)
+        {
+            if (!RecordProcedures.Procedures.TryGetValue(name, out var proc))
+                throw new FormatException($"Unknown procedure '{name}'");
+            return proc;
+        }
+        private (List<string>, List<ModRecord>) GetRecordDefinition(string name)
+        {
+            if (!definitions.TryGetValue(name, out var def))
+                throw new FormatException($"Unknown variable '{name}'");
+            if (!(def.GetFunc()(null) is ValueTuple<List<string>, List<ModRecord>> definition))
+                throw new FormatException($"Invalid record definition: ({name})");
+            return definition;
+        }
+        private void ExecuteProcedure(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
+        {
             switch (proc.Signature)
             {
                 case ProcSignature.TargetAndSource:
-                    {
-                        if (argParts.Length != 2)
-                            throw new FormatException($"Invalid arguments for {procName}: {rawArgs}");
-
-                        string sourceVar = argParts[0].Trim();
-                        string category = argParts[1].Trim().Trim('"');
-
-                        if (!definitions.TryGetValue(sourceVar, out var sourceList))
-                            throw new FormatException($"Unknown variable '{sourceVar}'");
-
-                        foreach (var t in targetList.Item2)
-                            foreach (var s in sourceList.Item2)
-                                proc.Func(currentRE!, t, s, category);
-
-                        currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.Ordinal).ToList());
-                        break;
-                    }
+                    ExecuteTargetAndSource(proc, targetList, argParts);
+                    break;
 
                 case ProcSignature.TargetAndString:
-                    {
-                        // Example: SetField("field name", expression)
-                        if (argParts.Length != 2)
-                            throw new FormatException($"Invalid arguments for {procName}: {rawArgs}");
-
-                        string fieldName = argParts[0].Trim().Trim('"');
-                        string exprText = argParts[1].Trim();
-
-                        // Parse expression using your Parser
-                        var parser = new Parser(exprText);
-                        CoreUtils.Print("Parsing expression: " + exprText);
-                        var exprFunc = parser.ParseValueExpression();
-                        foreach (var t in targetList.Item2)
-                        {
-                            var value = exprFunc(t);
-                            //CoreUtils.Print($"Record: cut_into_stun={t.GetFieldAsString("cut into stun")}, cut_def_bonus={t.GetFieldAsString("cut def bonus")}, level_bonus={t.GetFieldAsString("level bonus")}, material_type={t.GetFieldAsString("material type")}, class={t.GetFieldAsString("class")}");
-                            proc.Func(currentRE!, t, t, $"\"{fieldName}\"{RecordProcedures.sep}{Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)}");
-                        }
-                        break;
-                    }
+                    ExecuteTargetAndString(proc, targetList, argParts);
+                    break;
 
                 default:
                     throw new NotImplementedException($"Unhandled procedure signature: {proc.Signature}");
             }
-            CoreUtils.Print($"dependencies: { string.Join(",",targetList.Item1.Distinct(StringComparer.Ordinal).ToList())}");
+
             currentRE!.addDependencies(targetList.Item1.Distinct(StringComparer.Ordinal).ToList());
         }
 
+        private void ExecuteTargetAndSource(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
+        {
+            string sourceVar = argParts[0].Trim();
+            string category = argParts[1].Trim().Trim('"');
+
+            var sourceList = GetRecordDefinition(sourceVar);
+
+            foreach (var t in targetList.Item2)
+                foreach (var s in sourceList.Item2)
+                    proc.Func(currentRE!, t, s, category);
+
+            currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.Ordinal).ToList());
+        }
+        private void ExecuteTargetAndString(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
+        {
+            string fieldName = argParts[0].Trim().Trim('"');
+            string exprText = argParts[1].Trim();
+            // Parse expression using your Parser
+            var parser = new Parser(exprText);
+            CoreUtils.Print("Parsing expression: " + exprText);
+            var exprFunc = parser.ParseValueExpression();
+            foreach (var t in targetList.Item2)
+            {
+                var value = exprFunc(t);
+                proc.Func(currentRE!, t, t, $"\"{fieldName}\"{RecordProcedures.sep}{Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+        }
         // Helper to split procedure arguments while respecting nested parentheses
         private string[] SplitArgs(string input)
         {
@@ -269,9 +441,6 @@ namespace KenshiPatcher
             // Use the shared helper to split safely
             var names = CoreUtils.SplitModList(selector)
                 .ToHashSet(StringComparer.Ordinal);
-            //foreach ( var name in names) { 
-            //    MessageBox.Show("Mod in selector: " + name);
-           // }
             foreach (var kvp in _engCache)
             {
                 var modItem = kvp.Key;
@@ -294,58 +463,63 @@ namespace KenshiPatcher
 
             return (mode, recordType, condition);
         }
-        public (List<string>,List<ModRecord>) GetGroup(string text)
+        public (List<string>, List<ModRecord>) GetGroup(string text)
         {
-            //MessageBox.Show("Input: " + text);
-            var group = new List<ModRecord>();
+            var modSelector = ExtractRequiredParentheses(ref text, "mod selector");
+            var definition = ExtractRequiredParentheses(ref text, "record definition");
 
-            // --- Step 1: extract first (...) for mod selector ---
-            string? modSelector = ExtractParenthesesContent(ref text);
-            if (modSelector == null)
-                throw new FormatException("Missing mod selector (first parentheses).");
-
-            List<ReverseEngineer> targetMods = ParseModSelector(modSelector);
-
-            // --- Step 2: extract second (...) for record definition ---
-            string? definition = ExtractParenthesesContent(ref text);
-            if (definition == null)
-                throw new FormatException($"Faulty record definition (second parentheses): {text}.");
-
-            // --- Step 3: parse record definition ---
             var (mode, recordType, condition) = ParseRecordDefinition(definition);
+            var mods = ParseModSelector(modSelector);
 
-            // --- Step 4: collect records based on condition ---
+            var predicate = BuildRecordPredicate(condition);
+            var collected = CollectRecords(mods, recordType);
+            var (modNames, mergedRecords) = FilterUniqueRecordsByPreference(collected);
+
+            return FilterRecordsByPredicate(modNames, mergedRecords, predicate, mode);
+        }
+        private string ExtractRequiredParentheses(ref string text, string name)
+        {
+            string? content = ExtractParenthesesContent(ref text);
+            if (content == null)
+                throw new FormatException($"Missing {name} parentheses in: {text}");
+            return content;
+        }
+        private Func<ModRecord, bool> BuildRecordPredicate(string condition)
+        {
             var parser = new Parser(condition);
             CoreUtils.Print("Parsing condition: " + condition);
             var cond = parser.ParseValueExpression();
-            Func<ModRecord, bool> predicate = r=>(bool)cond(r);
-
-            var collected = new List<(ModRecord record, string sourceModName)>();
-
-            foreach (var re in targetMods)
+            return r => (bool)cond(r);
+        }
+        private IEnumerable<(ModRecord record, string modName)> CollectRecords(IEnumerable<ReverseEngineer> mods, string recordType)
+        {
+            foreach (var re in mods)
             {
                 string modName = re.modname;
-                var records = re.GetRecordsByTypeINMUTABLE(recordType)
-                                .Select(r => (r, modName));
-
-                collected.AddRange(records);
+                foreach (var record in re.GetRecordsByTypeINMUTABLE(recordType))
+                    yield return (record, modName);
             }
-            var (modNames, mergedRecords) = FilterUniqueRecordsByPreference(collected);
-            var finalModNames = new List<string>();
+        }
+        private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
+    List<string> modNames, List<ModRecord> records, Func<ModRecord, bool> predicate, string mode)
+        {
+            var finalNames = new List<string>();
             var finalRecords = new List<ModRecord>();
 
-            for (int i = 0; i < mergedRecords.Count; i++)
+            for (int i = 0; i < records.Count; i++)
             {
-                var rec = mergedRecords[i];
-                if (predicate(rec))
+                if (predicate(records[i]))
                 {
-                    finalRecords.Add(rec);
-                    finalModNames.Add(modNames[i]);
+                    finalRecords.Add(records[i]);
+                    finalNames.Add(modNames[i]);
+                    if (mode == "E")
+                        break;
                 }
             }
-            return (finalModNames, finalRecords);
+
+            return (finalNames, finalRecords);
         }
-private (List<string> modNames, List<ModRecord> records)
+        private (List<string> modNames, List<ModRecord> records)
 FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModName)> records)
         {
             var resultModNames = new List<string>();
@@ -375,7 +549,7 @@ FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModN
                 }
                 else
                 {
-                    CoreUtils.Print($"not found:{recList.ToArray()[0].record.StringId}");
+                    CoreUtils.Print($"not found new record of:{recList.ToArray()[0].record.StringId}");
                 }
             }
 
@@ -410,7 +584,7 @@ FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModN
                 }
             }
 
-            return null; // Unbalanced parentheses
+            return null;
         }
     }
 }

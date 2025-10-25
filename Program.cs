@@ -8,6 +8,8 @@ static class Program
     [STAThread]
     static void Main()
     {
+        //ReverseEngineer re= new ReverseEngineer();
+        //re.testAll();
         ApplicationConfiguration.Initialize();
         Application.Run(new MainForm());
     }    
