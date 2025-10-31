@@ -1,4 +1,5 @@
 ﻿using KenshiCore;
+using KenshiPatcher.ExpressionReader;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -6,7 +7,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using static KenshiPatcher.RecordProcedures;
-using KenshiPatcher.ExpressionReader;
 
 namespace KenshiPatcher
 {
@@ -332,7 +332,7 @@ namespace KenshiPatcher
             var proc = GetProcedure(procName);
             var targetList = GetRecordDefinition(targetVar);
             var argParts = SplitArgs(rawArgs);
-            CoreUtils.Print($"Parsing procedure: {text}");
+            CoreUtils.Print($"Parsing procedure: {text} , proc: {proc},argParts: {string.Join("@",argParts)}");
             ExecuteProcedure(proc, targetList, argParts);
         }
         private (string targetVar, string procName, string rawArgs) ParseProcedureHeader(string text)
@@ -370,8 +370,8 @@ namespace KenshiPatcher
                     ExecuteTargetAndSource(proc, targetList, argParts);
                     break;
 
-                case ProcSignature.TargetAndString:
-                    ExecuteTargetAndString(proc, targetList, argParts);
+                case ProcSignature.TargetAndExpression:
+                    ExecuteTargetAndExpressions(proc, targetList, argParts);
                     break;
 
                 default:
@@ -383,7 +383,7 @@ namespace KenshiPatcher
 
         private void ExecuteTargetAndSource(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
         {
-            string sourceVar = argParts[0].Trim();
+            /*string sourceVar = argParts[0].Trim();
             string category = argParts[1].Trim().Trim('"');
 
             var sourceList = GetRecordDefinition(sourceVar);
@@ -391,13 +391,26 @@ namespace KenshiPatcher
             foreach (var t in targetList.Item2)
                 foreach (var s in sourceList.Item2)
                     proc.Func(currentRE!, t, s, category);
+            */
 
+            var expressions = new List<IExpression<object>>();
+            foreach (string arg in argParts)
+            {
+                var parser = new Parser(arg.Trim());
+                expressions.Add(parser.ParseExpression());
+            }
+            string sourceVar = expressions[0].GetFunc()(null).ToString()!;
+            var category = expressions[1];
+            var sourceList = GetRecordDefinition(sourceVar);
+            foreach (var t in targetList.Item2)
+                foreach (var s in sourceList.Item2)
+                    proc.Func(currentRE!, t, s, new List<IExpression<object>>{category});
             currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.Ordinal).ToList());
         }
-        private void ExecuteTargetAndString(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
+        /*private void ExecuteTargetAndString(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
         {
             string fieldName = argParts[0].Trim().Trim('"');
-            string exprText = argParts[1].Trim();
+            string exprText = argParts[1].Trim();//aqui es el problema, asume que solo hay 2 argumentos
             // Parse expression using your Parser
             var parser = new Parser(exprText);
             CoreUtils.Print("Parsing expression: " + exprText);
@@ -406,6 +419,20 @@ namespace KenshiPatcher
             {
                 var value = exprFunc(t);
                 proc.Func(currentRE!, t, t, $"\"{fieldName}\"{RecordProcedures.sep}{Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)}");
+            }
+        }*/
+        private void ExecuteTargetAndExpressions(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
+        {
+            var expressions = new List<IExpression<object>>();
+            foreach (string arg in argParts)
+            {
+                var parser = new Parser(arg.Trim());
+                expressions.Add(parser.ParseExpression());
+            }
+
+            foreach (var record in targetList.Item2)
+            {
+                proc.Func(currentRE!, record, record, expressions);
             }
         }
         // Helper to split procedure arguments while respecting nested parentheses

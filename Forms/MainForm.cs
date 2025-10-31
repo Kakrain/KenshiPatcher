@@ -15,7 +15,6 @@ namespace KenshiPatcher.Forms
         private Boolean IndexChangeEnabled = true;
         private Dictionary<ModItem, ReverseEngineer> ReverseEngineersCache = new();
         private Patcher? KPatcher;
-        private Button PatchButton;
         public MainForm()
         {
             Text = "Kenshi Patcher";
@@ -24,14 +23,45 @@ namespace KenshiPatcher.Forms
             this.ForeColor = Color.FromArgb(unchecked((int)0xFFE9E4D7));
             setColors(Color.FromArgb(unchecked((int)0xFF2F2A24)), Color.FromArgb(unchecked((int)0xFF4C433A)));
             
-            modsListView.SelectedIndexChanged += ModsListView_SelectedIndexChanged;
+            modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
             AddColumn("Patch Status", mod => getPatchStatus(mod),150);
-            PatchButton=AddButton("Patch it!",PatchItClick);
-            
+            AddButton("Patch it!", PatchItClick, mod =>
+            {
+                var selectedMod = getSelectedMod();
+                if (selectedMod == null)
+                    return false;
+                string modpath = selectedMod.getModFilePath()!;
+                string dir = Path.GetDirectoryName(modpath)!;
+                string modName = Path.GetFileNameWithoutExtension(modpath);
+                string patchPath = Path.Combine(dir, modName + ".patch");
+                return File.Exists(patchPath);
+            });
+
+        }
+        private bool isModPatched(ModItem mod)
+        {
+            string modpath = mod.getModFilePath()!;
+            string dir = Path.GetDirectoryName(modpath)!;
+            string modName = Path.GetFileNameWithoutExtension(modpath);
+            string patchPath = Path.Combine(dir, modName + ".patch");
+            string unpatchedPath = Path.Combine(dir, modName + ".unpatched");
+            if (!File.Exists(patchPath))
+                return false;
+            return File.Exists(unpatchedPath);
+        }
+        private string getUnpatchedPath(ModItem mod)
+        {
+            string modpath = mod.getModFilePath()!;
+            string dir = Path.GetDirectoryName(modpath)!;
+            string modName = Path.GetFileNameWithoutExtension(modpath);
+            string unpatchedPath = Path.Combine(dir, modName + ".unpatched");
+            return unpatchedPath;
         }
         private string getPatchStatus(ModItem mod)
         {
-            string modpath = mod.getModFilePath()!;
+            string? modpath = mod.getModFilePath()!;
+            if (modpath == null)
+                return "deleted";
             string dir = Path.GetDirectoryName(modpath)!;
             string modName = Path.GetFileNameWithoutExtension(modpath);
 
@@ -41,9 +71,14 @@ namespace KenshiPatcher.Forms
                 return "_";
             return (File.Exists(unpatchedPath) ? "patched already" : "not patched");
         }
-        private void PatchItClick(object? sender, EventArgs e)
-        {
-            KPatcher!.runPatch(getSelectedMod().getModFilePath()!);
+        private void PatchItClick(object? sender, EventArgs e) {
+
+            var mod = getSelectedMod();
+            if (mod == null) {
+                CoreUtils.Print("No mod selected", 1);
+                return; 
+            }
+            KPatcher!.runPatch(mod.getModFilePath()!);
         }
 
         protected override async void OnShown(EventArgs e)
@@ -59,48 +94,60 @@ namespace KenshiPatcher.Forms
             LoadBaseGameData();
             InitializeProgress(0, mergedMods.Count);
             int i = 0;
+            List<string> modsToRemove = new();
             foreach (var mod in mergedMods)
             {
                 ReverseEngineer re = new ReverseEngineer();
-                re.LoadModFile(mod.Value.getModFilePath()!);
+                string realmodpath= mod.Value.getModFilePath()!;
+                if (string.IsNullOrEmpty(realmodpath))
+                {
+                    modsToRemove.Add(mod.Key);
+                    continue;
+                }
+                if (isModPatched(mod.Value))
+                    realmodpath = getUnpatchedPath(mod.Value);
+                re.LoadModFile(realmodpath);
                 ReverseEngineersCache[mod.Value] = re;
-                ReportProgress(i, $"Engineered mod:{i}");
                 i++;
+                ReportProgress(i, $"Engineered mod:{i}");
             }
+            foreach (var key in modsToRemove)
+                mergedMods.Remove(key);
+
+            modsListView.BeginUpdate();
+            try
+            {
+                foreach (ListViewItem item in modsListView.Items.Cast<ListViewItem>().ToList())
+                {
+                    if (item.Tag is ModItem mod && modsToRemove.Contains(mod.Name))
+                        modsListView.Items.Remove(item);
+                }
+            }
+            finally
+            {
+                modsListView.EndUpdate();
+            }
+
             KPatcher = new Patcher(ReverseEngineersCache);
 
         }
-        private void ModsListView_SelectedIndexChanged(object? sender, EventArgs? e)
+        private void Mainform_SelectedIndexChanged(object? sender, EventArgs? e)
         {
-            if (!IndexChangeEnabled)
+            if (modsListView.SelectedItems.Count == 0)
+                return;
+            var selectedMod = getSelectedMod();
+            if (!IndexChangeEnabled || selectedMod==null)
             {
                 return;
             }
-            if (modsListView.SelectedItems.Count == 0)
-                return;
-
-
-            var selectedMod = getSelectedMod();
-            string modpath = selectedMod.getModFilePath()!;
-            string dir = Path.GetDirectoryName(modpath)!;
-            string modName = Path.GetFileNameWithoutExtension(modpath);
-
-            string patchPath = Path.Combine(dir, modName + ".patch");
-            PatchButton.Enabled = File.Exists(patchPath);
-
+            
+            
             modsListView.BeginUpdate();
-            
             var logform = getLogForm();
-
-            
-            logform.Reset();
+            //logform.Reset();
             ReverseEngineer re = new ReverseEngineer();
             re.LoadModFile(selectedMod.getModFilePath()!);
-            //List<(string Text, Color Color)> bs = re.ValidateAllDataAsBlocks();
-            //List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(1,"ARMOUR", new List<string> { "cut into stun", "material type", "cut def bonus","class","level bonus","pierce def mult" });
-            List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(-1);
-            //List<(string Text, Color Color)> bs = re.GetAllDataAsBlocks(1);
-            //List<(string Text, Color Color)> bs=new List<(string Text, Color Color)>();
+            List<(string Text, Color Color)> bs = re.GetHeaderAsBlocks();
             /*foreach (var mod in ReverseEngineersCache.Keys)
             {
                 if (string.Equals("No Cut Efficiency.mod", mod.Name, StringComparison.Ordinal))//"gamedata.base",BBGoatsBeastforge.mod
@@ -122,8 +169,6 @@ namespace KenshiPatcher.Forms
             
             InitializeProgress(0, bs.Count);
             logform.LogBlocks(bs, (done, label) => ReportProgress(done, label));
-
-
             modsListView.EndUpdate();
         }
     }
