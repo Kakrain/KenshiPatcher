@@ -11,6 +11,27 @@ using System.Threading.Tasks;
 
 namespace KenshiPatcher.ExpressionReader
 {
+    public static class ExpressionUtils
+    { 
+        public static string ExpectString(IExpression<object> expression,ModRecord? r=null)
+        {
+            object o = expression.GetFunc()(r);
+            if (o is string s)
+                return s;
+            throw new FormatException($"Expression is expected to be a string: {expression.ToString()}");
+        }
+        public static (List<string>,List<ModRecord>) ExpectGroupRecord(IExpression<object>expression, ModRecord? r = null)
+        {
+            object o = expression.GetFunc()(r);
+            if (o is (List<string> names, List<ModRecord> records))
+                return (names, records);
+            throw new FormatException($"Expression is expected to be a group: {expression.ToString()}");
+
+        }
+
+
+    }
+
     public interface IExpression<T>
     {
         Func<ModRecord?, T> GetFunc();
@@ -70,7 +91,7 @@ namespace KenshiPatcher.ExpressionReader
             { "<", (l, r) => Convert.ToDouble(l)<Convert.ToDouble(r) },
             { ">=", (l, r) => Convert.ToDouble(l)>=Convert.ToDouble(r) },
             { "<=", (l, r) => Convert.ToDouble(l)<=Convert.ToDouble(r) },
-            { "==", (l, r) => l.Equals(r) },
+            { "==", (l, r) => l == null && r == null ? true : l == null || r == null ? false : l.Equals(r)  },
             { "!=", (l, r) => !(bool)Operators!["=="](l, r) }
 
         };
@@ -165,7 +186,6 @@ namespace KenshiPatcher.ExpressionReader
     public class UnaryExpression : IExpression<object>
     {
         private readonly IExpression<object> inner;
-        //private readonly Func<object, object> op;
         private readonly string op;
         public static readonly Dictionary<string, Func<object, object>> UnaryOperators = new()
     {
@@ -349,6 +369,43 @@ namespace KenshiPatcher.ExpressionReader
         }
         public override string ToString() => $"VariableExpression<{Name}>";
     }
+    public class ArrayExpression : IExpression<object>
+    {
+        private readonly List<IExpression<object>> elements;
+
+        public ArrayExpression(List<IExpression<object>> elements)
+        {
+            this.elements = elements;
+        }
+
+        public Func<ModRecord?, object> GetFunc()
+        {
+            var funcs = elements.Select(e => e.GetFunc()).ToList();
+
+            return record =>
+            {
+                if (funcs.Count == 0) return Array.Empty<object>();
+                var values = funcs.Select(f => f(record)).ToList();
+                Type elementType = values[0]?.GetType() ?? typeof(object);
+                foreach (var val in values)
+                {
+                    if (val == null) continue; // optional: treat null as compatible
+                    if (val.GetType() != elementType)
+                        throw new FormatException($"ArrayExpression elements have mixed types: {elementType} vs {val.GetType()}");
+                }
+                Array array = Array.CreateInstance(elementType, values.Count);
+                for (int i = 0; i < values.Count; i++)
+                    array.SetValue(values[i], i);
+
+                return array;
+            };
+        }
+
+        public override string ToString()
+        {
+            return $"Array[{string.Join(", ", elements)}]";
+        }
+    }
     public class BoolFunctionExpression : IExpression<bool>
     {
         private readonly Func<ModRecord, bool> func;
@@ -358,8 +415,6 @@ namespace KenshiPatcher.ExpressionReader
             {
             { "true", (_, __) => true },
             { "false", (_, __) => false },
-
-            // FieldExist(fieldName)
             { "FieldExist", (r, args) =>
                 {
                     if (args.Count != 1)
@@ -380,37 +435,43 @@ namespace KenshiPatcher.ExpressionReader
             {
                 if (args.Count == 0)
                     throw new Exception("isExtraDataOfAny expects at least one argument");
-                var varNameObj = args[0].GetFunc()(r);
-                if (varNameObj == null)
-                    throw new Exception("Missing variable name");
-                string varName = varNameObj.ToString()!;
+                var definition = args[0].GetFunc()(r);
                 string? category = args.Count > 1 ? args[1].GetFunc()(r)?.ToString() : null;
-                if (!Patcher.Instance.definitions.TryGetValue(varName, out var def))
-                    throw new Exception($"Definition '{varName}' not found");
-                var definition=def.GetFunc()(null);
+                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].GetFunc()(r)) : null;
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
-                    return group.Item2.Any(rec => rec.isExtraDataOfThis(r, category));
-                throw new Exception($"Definition '{varName}' not found");
+                    return group.Item2.Any(rec => rec.isExtraDataOfThis(r, category,variables));
+                throw new Exception($"Definition '{definition}' malformed");
             }},
             { "hasAnyAsExtraData", (r, args) =>
             {
                 if (args.Count == 0)
                     throw new Exception("hasAnyAsExtraData expects at least one argument");
-                var varNameObj = args[0].GetFunc()(r);
-                if (varNameObj == null)
-                    throw new Exception("Missing variable name");
-                string varName = varNameObj.ToString()!;
+                var definition = args[0].GetFunc()(r);
                 string? category = args.Count > 1 ? args[1].GetFunc()(r)?.ToString() : null;
-                if (!Patcher.Instance.definitions.TryGetValue(varName, out var def))
-                    throw new Exception($"Definition '{varName}' not found");
-                var definition=def.GetFunc()(null);
+                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].GetFunc()(r)) : null;
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
-                    return group.Item2.Any(rec => rec.hasThisAsExtraData(r, category));
-                throw new Exception($"Definition '{varName}' not found");
+                    return group.Item2.Any(rec => rec.hasThisAsExtraData(r, category, variables));
+                throw new Exception($"Definition '{definition}' malformed");
+            }},
+            { "allExtraDataIsWithin", (r, args) =>
+            {
+                if (args.Count == 0)
+                    throw new Exception("allExtraDataIsWithin expects at least one argument");
+                var definition = args[0].GetFunc()(r);
+                string? category = args.Count > 1 ? args[1].GetFunc()(r)?.ToString() : null;
+                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].GetFunc()(r)) : null;
+                if (definition is ValueTuple<List<string>, List<ModRecord>> group)
+                    return group.Item2.All(rec => rec.hasThisAsExtraData(r, category, variables));
+                throw new Exception($"Definition '{definition}' malformed");
             }}
             };
         private readonly List<IExpression<object>> arguments;
-
+        public static T[] ConvertArray<T>(object? value)
+        {
+            if (value is not Array arr)
+                throw new Exception($"Expected array, got {value?.GetType().Name ?? "null"}");
+            return arr.Cast<object>().Select(o => (T)Convert.ChangeType(o, typeof(T))).ToArray();
+        }
         public BoolFunctionExpression(string funcName, List<IExpression<object>> args)
         {
             arguments = args;
@@ -444,7 +505,6 @@ namespace KenshiPatcher.ExpressionReader
 
             public override string ToString() => $"Table<{Name}>";
         }
-
         public Func<ModRecord?, object> GetFunc()
         {
             var targetFunc = target.GetFunc();
@@ -452,26 +512,33 @@ namespace KenshiPatcher.ExpressionReader
 
             return record =>
             {
-                var targetVal = targetFunc(record)?.ToString();
-                var indexVal = indexFunc(record)?.ToString();
+                var targetVal = targetFunc(record);
+                var indexVal = indexFunc(record);
 
-                if (targetVal == null)
-                    throw new Exception("IndexExpression: table name evaluated to null.");
-
-                if (indexVal == null)
-                    throw new Exception("IndexExpression: index evaluated to null.");
-                if (!Patcher.Instance.tables.TryGetValue(targetVal, out var table))
-                    throw new Exception($"IndexExpression: Table '{targetVal}' not found in Patcher.Instance.tables.");
-                if (!table.TryGetValue(indexVal, out var value))
-                    throw new Exception($"IndexExpression: Key '{indexVal}' not found in table '{targetVal}'.");
-                if (value is IExpression<object> expr)
+                if (targetVal is IList<object> list)
                 {
-                    var func = expr.GetFunc();
-                    var result = func(record);
-                    return result;
+                    int idx = Convert.ToInt32(indexVal);
+                    if (idx < 0 || idx >= list.Count)
+                        throw new Exception($"Array index {idx} out of range");
+                    return list[idx];
                 }
 
-                // fallback — if table stored raw data somehow
+                // existing table-handling logic below...
+                var targetStr = targetVal?.ToString();
+                var indexStr = indexVal?.ToString();
+
+                if (targetStr == null || indexStr == null)
+                    throw new Exception("IndexExpression: null table name or key");
+
+                if (!Patcher.Instance.tables.TryGetValue(targetStr, out var table))
+                    throw new Exception($"Table '{targetStr}' not found");
+
+                if (!table.TryGetValue(indexStr, out var value))
+                    throw new Exception($"Key '{indexStr}' not found in table '{targetStr}'");
+
+                if (value is IExpression<object> expr)
+                    return expr.GetFunc()(record);
+
                 return value;
             };
         }
@@ -494,7 +561,216 @@ namespace KenshiPatcher.ExpressionReader
         {
             return _ => group;
         }
+        public override string ToString()
+        {
+            StringBuilder sb = new();
+            var (names, records) = group;
+            for (int i = 0; i < names.Count; i++)
+            {
+                sb.AppendLine($"{names[i]} => {records[i].ToString()}");
+            }
+            return sb.ToString();
+        }
     }
+        public class PipeExpression : IExpression<object>
+        {
+            private readonly RecordGroupExpression left;    // left is explicitly a RecordGroupExpression
+            private readonly ProcedureExpression right;     // right is explicitly a ProcedureExpression
+
+            public PipeExpression(RecordGroupExpression left, ProcedureExpression right)
+            {
+                this.left = left ?? throw new ArgumentNullException(nameof(left));
+                this.right = right ?? throw new ArgumentNullException(nameof(right));
+            }
+
+            public Func<ModRecord?, object> GetFunc()
+            {
+                var leftFunc = left.GetFunc();
+
+                return record =>
+                {
+                    var leftValue = leftFunc(record);
+
+                    if (leftValue is not (List<string> names, List<ModRecord> records))
+                        throw new Exception("PipeExpression: left side must evaluate to a record group (List<string>, List<ModRecord>)");
+
+                    right.SetTarget((names, records));
+                    var procFunc = right.GetFunc();
+                    procFunc(record);
+                    return leftValue;
+                };
+            }
+            public override string ToString()
+            {
+                return $"PipeExpression({left} -> {right})";
+            }
+        }
+    
+    public class ProcedureExpression : IExpression<object>
+    {
+        private readonly string procedureName;
+        private readonly List<IExpression<object>> arguments;
+        private readonly Func<(List<string>, List<ModRecord>), object> func;
+        private (List<string>, List<ModRecord>)? target;
+
+        public static readonly Dictionary<string, Func<(List<string>, List<ModRecord>), List<IExpression<object>>, object?>> procedures =
+            new()
+            {
+            { "SetField", (targetGroup, args) =>
+                {
+
+                    foreach (var record in targetGroup.Item2)
+                    {
+                        if(!(args[0].GetFunc()(record) is string strfieldname))
+                            throw new FormatException($"Invalid field name: ({args[0].ToString()})");
+                        string value=args[1].GetFunc()(record).ToString()!;
+                        Patcher.Instance.currentRE!.SetField(record,strfieldname,value);
+                    }
+                    return null;
+                }
+            },
+            { "ForceSetField", (targetGroup, args) =>
+                {
+                    foreach (var record in targetGroup.Item2)
+                    {
+                        if(!(args[0].GetFunc()(record) is string strfieldname))
+                            throw new FormatException($"Invalid field name: ({args[0].ToString()})");
+                        string value=args[1].GetFunc()(record).ToString()!;
+                        if(!(args[2].GetFunc()(null) is string strtype))
+                            throw new FormatException($"Invalid field name: ({args[2].ToString()})");
+                        Patcher.Instance.currentRE!.ForceSetField(record,strfieldname,value,strtype);
+                    }
+                    return null;
+                }
+            },
+            { "AddExtraData", (targetGroup, args) =>
+                {
+                    if(!(args[0].GetFunc()(null) is (List<string> modnames, List<ModRecord> sources)))
+                        throw new FormatException($"Invalid definition name: ({args[0].ToString()})");
+                    if(!(args[1].GetFunc()(null) is string category))
+                        throw new FormatException($"Invalid category: ({args[1].ToString()})");
+                    Func<ModRecord?, object>? func_array=null;
+                    if (args.Count>2)
+                        func_array=args[2].GetFunc();
+                    foreach (var record in targetGroup.Item2)
+                    {
+                        int[]? arrayvar = null;
+                        if (func_array != null)
+                        {
+                            var result = func_array(record);
+                            if (result is int[] arr)
+                                arrayvar = arr;
+                            else
+                                throw new FormatException($"Invalid array returned for category: {result}");
+                        }
+                        foreach (var source in sources)
+                        {
+                            Patcher.Instance.currentRE!.AddExtraData(record,source,category,func_array==null?null:arrayvar);
+                        }
+                    }
+                    Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
+                    return null;
+                }
+            }
+            };
+
+        public ProcedureExpression(string name, List<IExpression<object>> args)
+        {
+            procedureName = name;
+            arguments = args;
+            if (!procedures.TryGetValue(name, out var f))
+                throw new Exception($"Unknown procedure {name}");
+            func = tg =>
+            {
+                var result = f(tg, arguments);
+                Patcher.Instance.currentRE!.addDependencies(tg.Item1.Distinct(StringComparer.Ordinal).ToList());
+                return result!;
+            };
+        }
+
+        public void SetTarget((List<string>, List<ModRecord>) targetGroup)
+        {
+            target = targetGroup;
+        }
+
+        public Func<ModRecord?, object> GetFunc()
+        {
+            if (target == null)
+                throw new Exception("ProcedureExpression has no target");
+
+            return _ => func(target.Value);
+        }
+    }
+    public class GlobalFunctionExpression : IExpression<object>
+    {
+        private readonly string name;
+        private readonly List<IExpression<object>> args;
+
+        public static readonly Dictionary<string, Action<List<IExpression<object>>>> globalFuncs = new()
+        {
+            { "Print", args =>
+                {
+                    CoreUtils.Print(getStringFromArgs(args),1);
+                }
+            },
+            { "Debug", args =>
+                {
+                    CoreUtils.Print(getStringFromArgs(args),0);
+                }
+            },
+            { "InspectRecord", args =>
+                {
+                    
+                    var (names,records) =ExpressionUtils.ExpectGroupRecord(args[0]);
+                    string stringid=ExpressionUtils.ExpectString(args[1]);
+                    ModRecord? found=records.Find(rec=>rec.StringId==stringid);
+                    if(found == null)
+                        throw new Exception($"mod with stringId '{stringid}' not found");
+                    CoreUtils.Print(found.getDataAsString(),0);
+                }
+            },
+            { "ShowRecordEvolution", args =>
+                {
+                    string stringid=ExpressionUtils.ExpectString(args[0]);
+                    CoreUtils.Print(Patcher.Instance.GetModRecordEvolution(stringid),0);
+                }
+            },
+            { "Stop",args=>
+                {
+                    Patcher.Instance.Stop();
+                }
+            }
+        };
+        private static string getStringFromArgs(List<IExpression<object>> args)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (var arg in args) {
+                sb.Append(arg.ToString()+"\n");
+            }
+            return sb.ToString();
+        }
+
+        public GlobalFunctionExpression(string name, List<IExpression<object>> args)
+        {
+            this.name = name;
+            this.args = args;
+        }
+
+        public Func<ModRecord?, object> GetFunc()
+        {
+            if (!globalFuncs.TryGetValue(name, out var func))
+                throw new Exception($"Unknown global function '{name}'");
+
+            return _ =>
+            {
+                func(args);
+                return true;
+            };
+        }
+
+        public override string ToString() => $"@{name}({string.Join(", ", args)})";
+    }
+
 }
 
     

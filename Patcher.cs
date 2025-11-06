@@ -1,12 +1,10 @@
 ﻿using KenshiCore;
 using KenshiPatcher.ExpressionReader;
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
-using static KenshiPatcher.RecordProcedures;
 
 namespace KenshiPatcher
 {
@@ -31,6 +29,8 @@ namespace KenshiPatcher
         private readonly string _proc = "->";
         private readonly string _comment = ";";
         private readonly string _extraction = "<<<";
+        private readonly string _globalfunc = "@";
+        private bool stopping=false;
         private readonly List<string> basemods = new() { "gamedata.base", "rebirth.mod","Newwworld.mod","Dialogue.mod" };
         private List<string>? assumedReqs = null;
         public ReverseEngineer? currentRE;
@@ -100,13 +100,18 @@ namespace KenshiPatcher
             try
             {
                 ProcessPatchLines(lines);
+                if (stopping)
+                {
+                    stopping = false;
+                    CoreUtils.Print("Stopping due to Global Function", 1);
+                    return;
+                }
                 savePatchedMod(path);
                 MessageBox.Show($"{modName} patched!");
             }
             catch (Exception ex)
             {
                 HandlePatchError(ex);
-                //CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
             }
             finally
             {
@@ -139,6 +144,10 @@ namespace KenshiPatcher
             int lineNumber = 0;
             foreach (string rawLine in lines)
             {
+                if (stopping)
+                {
+                    return;
+                }
                 lineNumber++;
                 string line = CleanLine(rawLine);
                 if (string.IsNullOrWhiteSpace(line))
@@ -161,10 +170,13 @@ namespace KenshiPatcher
                 ParseDefinition(line);
             else if (line.Contains(_extraction))
                 ParseExtraction(line);
-            else if (line.Contains(_proc)) { 
+            else if (line.StartsWith(_globalfunc))
+                ParseProcedure(line);
+            else if (line.Contains(_proc))
+            {
                 printAllDefinitions();
                 ParseProcedure(line);
-                }
+            }
             else
                 throw new FormatException($"Unrecognized syntax at line {lineNumber}: {line}");
         }
@@ -328,137 +340,11 @@ namespace KenshiPatcher
         }
         public void ParseProcedure(string text)
         {
-            var (targetVar, procName, rawArgs) = ParseProcedureHeader(text);
-            var proc = GetProcedure(procName);
-            var targetList = GetRecordDefinition(targetVar);
-            var argParts = SplitArgs(rawArgs);
-            CoreUtils.Print($"Parsing procedure: {text} , proc: {proc},argParts: {string.Join("@",argParts)}");
-            ExecuteProcedure(proc, targetList, argParts);
-        }
-        private (string targetVar, string procName, string rawArgs) ParseProcedureHeader(string text)
-        {
-            var procParts = text.Split(_proc, StringSplitOptions.RemoveEmptyEntries);
-            if (procParts.Length != 2)
-                throw new FormatException($"Invalid procedure syntax: '{text}'");
 
-            string targetVar = procParts[0].Trim();
-            var match = Regex.Match(procParts[1].Trim(), @"^(\w+)\((.*)\)$");
-            if (!match.Success)
-                throw new FormatException($"Invalid procedure call format: '{procParts[1]}'");
-
-            return (targetVar, match.Groups[1].Value, match.Groups[2].Value.Trim());
-        }
-        private Procedure GetProcedure(string name)
-        {
-            if (!RecordProcedures.Procedures.TryGetValue(name, out var proc))
-                throw new FormatException($"Unknown procedure '{name}'");
-            return proc;
-        }
-        private (List<string>, List<ModRecord>) GetRecordDefinition(string name)
-        {
-            if (!definitions.TryGetValue(name, out var def))
-                throw new FormatException($"Unknown variable '{name}'");
-            if (!(def.GetFunc()(null) is ValueTuple<List<string>, List<ModRecord>> definition))
-                throw new FormatException($"Invalid record definition: ({name})");
-            return definition;
-        }
-        private void ExecuteProcedure(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
-        {
-            switch (proc.Signature)
-            {
-                case ProcSignature.TargetAndSource:
-                    ExecuteTargetAndSource(proc, targetList, argParts);
-                    break;
-
-                case ProcSignature.TargetAndExpression:
-                    ExecuteTargetAndExpressions(proc, targetList, argParts);
-                    break;
-
-                default:
-                    throw new NotImplementedException($"Unhandled procedure signature: {proc.Signature}");
-            }
-
-            currentRE!.addDependencies(targetList.Item1.Distinct(StringComparer.Ordinal).ToList());
-        }
-
-        private void ExecuteTargetAndSource(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
-        {
-            /*string sourceVar = argParts[0].Trim();
-            string category = argParts[1].Trim().Trim('"');
-
-            var sourceList = GetRecordDefinition(sourceVar);
-
-            foreach (var t in targetList.Item2)
-                foreach (var s in sourceList.Item2)
-                    proc.Func(currentRE!, t, s, category);
-            */
-
-            var expressions = new List<IExpression<object>>();
-            foreach (string arg in argParts)
-            {
-                var parser = new Parser(arg.Trim());
-                expressions.Add(parser.ParseExpression());
-            }
-            string sourceVar = expressions[0].GetFunc()(null).ToString()!;
-            var category = expressions[1];
-            var sourceList = GetRecordDefinition(sourceVar);
-            foreach (var t in targetList.Item2)
-                foreach (var s in sourceList.Item2)
-                    proc.Func(currentRE!, t, s, new List<IExpression<object>>{category});
-            currentRE!.addReferences(sourceList.Item1.Distinct(StringComparer.Ordinal).ToList());
-        }
-        /*private void ExecuteTargetAndString(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
-        {
-            string fieldName = argParts[0].Trim().Trim('"');
-            string exprText = argParts[1].Trim();//aqui es el problema, asume que solo hay 2 argumentos
-            // Parse expression using your Parser
-            var parser = new Parser(exprText);
-            CoreUtils.Print("Parsing expression: " + exprText);
-            var exprFunc = parser.ParseValueExpression();
-            foreach (var t in targetList.Item2)
-            {
-                var value = exprFunc(t);
-                proc.Func(currentRE!, t, t, $"\"{fieldName}\"{RecordProcedures.sep}{Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture)}");
-            }
-        }*/
-        private void ExecuteTargetAndExpressions(Procedure proc, (List<string>, List<ModRecord>) targetList, string[] argParts)
-        {
-            var expressions = new List<IExpression<object>>();
-            foreach (string arg in argParts)
-            {
-                var parser = new Parser(arg.Trim());
-                expressions.Add(parser.ParseExpression());
-            }
-
-            foreach (var record in targetList.Item2)
-            {
-                proc.Func(currentRE!, record, record, expressions);
-            }
-        }
-        // Helper to split procedure arguments while respecting nested parentheses
-        private string[] SplitArgs(string input)
-        {
-            var args = new List<string>();
-            int parenLevel = 0;
-            int lastSplit = 0;
-
-            for (int i = 0; i < input.Length; i++)
-            {
-                char c = input[i];
-                if (c == '(') parenLevel++;
-                else if (c == ')') parenLevel--;
-                else if (c == ',' && parenLevel == 0)
-                {
-                    args.Add(input.Substring(lastSplit, i - lastSplit).Trim());
-                    lastSplit = i + 1;
-                }
-            }
-
-            // Add last argument
-            if (lastSplit < input.Length)
-                args.Add(input.Substring(lastSplit).Trim());
-
-            return args.ToArray();
+            CoreUtils.Print($"Executing procedure: {text}");
+            var parser = new Parser(text);
+            var expr = parser.ParseExpression();
+            expr.GetFunc()(null);
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
         {
@@ -477,6 +363,22 @@ namespace KenshiPatcher
                     result.Add(re);
             }
             return result;
+        }
+        public string GetModRecordEvolution(string StringId)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (var kvp in _engCache)
+            {
+                string modname = kvp.Key.Name;
+                ReverseEngineer re = kvp.Value;
+                ModRecord? r=re.searchModRecordByStringId(StringId);
+                if (r != null)
+                    sb.AppendLine($"{modname} => {r.ToString()}");
+            }
+            return sb.ToString();
+        }
+        public void Stop() {
+            stopping = true;
         }
         private (string mode, string recordType, string condition) ParseRecordDefinition(string def)
         {

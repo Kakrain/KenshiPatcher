@@ -1,4 +1,5 @@
 ﻿using KenshiCore;
+using ScintillaNET;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -7,6 +8,7 @@ using System.Linq;
 using System.Security.Policy;
 using System.Text;
 using System.Threading.Tasks;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace KenshiPatcher.Forms
 {
@@ -23,7 +25,6 @@ namespace KenshiPatcher.Forms
             this.ForeColor = Color.FromArgb(unchecked((int)0xFFE9E4D7));
             setColors(Color.FromArgb(unchecked((int)0xFF2F2A24)), Color.FromArgb(unchecked((int)0xFF4C433A)));
             
-            modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
             AddColumn("Patch Status", mod => getPatchStatus(mod),150);
             AddButton("Patch it!", PatchItClick, mod =>
             {
@@ -37,6 +38,13 @@ namespace KenshiPatcher.Forms
                 return File.Exists(patchPath);
             });
 
+            modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
+        }
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            modsListView.SelectedIndexChanged -= Mainform_SelectedIndexChanged;
+            modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
         }
         private bool isModPatched(ModItem mod)
         {
@@ -131,45 +139,62 @@ namespace KenshiPatcher.Forms
             KPatcher = new Patcher(ReverseEngineersCache);
 
         }
+        private void ShowModInfo(ModItem mod)
+        {
+            ReverseEngineer re = new ReverseEngineer();
+            re.LoadModFile(mod.getModFilePath()!);
+            var logform = getLogForm();
+            if (logform == null) return;
+
+            string headerText = re.GetHeaderAsString();
+
+            List<string> notfounddeps = new();
+            foreach (string d in re.getDependencies())
+            {
+                mergedMods.TryGetValue(d, out var m);
+                if (m == null)
+                {
+                    notfounddeps.Add(d);
+                }
+            }
+            string dependencies = "not found Dependencies: " + (notfounddeps.Count == 0 ? "none" : string.Join("|", notfounddeps));
+
+            // Always run UI updates on the UI thread
+            if (logform.InvokeRequired)
+            {
+                logform.BeginInvoke((Action)(() =>
+                {
+                    logform.LogString(headerText);
+                    logform.LogString(dependencies, Color.Red);
+                    logform.Refresh();
+                }));
+            }
+            else
+            {
+                logform.LogString(headerText);
+                logform.LogString(dependencies, Color.Red);
+                logform.Refresh();
+            }
+        }
         private void Mainform_SelectedIndexChanged(object? sender, EventArgs? e)
         {
             if (modsListView.SelectedItems.Count == 0)
                 return;
             var selectedMod = getSelectedMod();
-            if (!IndexChangeEnabled || selectedMod==null)
+            if (!IndexChangeEnabled || selectedMod == null)
             {
                 return;
             }
-            
-            
             modsListView.BeginUpdate();
-            var logform = getLogForm();
-            //logform.Reset();
-            ReverseEngineer re = new ReverseEngineer();
-            re.LoadModFile(selectedMod.getModFilePath()!);
-            List<(string Text, Color Color)> bs = re.GetHeaderAsBlocks();
-            /*foreach (var mod in ReverseEngineersCache.Keys)
+            try
             {
-                if (string.Equals("No Cut Efficiency.mod", mod.Name, StringComparison.Ordinal))//"gamedata.base",BBGoatsBeastforge.mod
-                {
-                    if (ReverseEngineersCache.TryGetValue(mod, out var rebase))
-                        bs = re.CompareWith(rebase, "ARMOUR", new List<string> { "cut into stun", "slot" });
-                }
-            }*/
-            List<string> notfounddeps = new();
-            foreach(string d in re.getDependencies())
-            {
-                mergedMods.TryGetValue(d, out var m);
-                if (m== null)
-                {
-                    notfounddeps.Add(d);
-                }
+                BeginInvoke(new Action(() => ShowModInfo(selectedMod)));
             }
-            bs.Add(("not found Dependencies: " + (notfounddeps.Count==0 ? "none" : string.Join("|", notfounddeps)), Color.Red));
-            
-            InitializeProgress(0, bs.Count);
-            logform.LogBlocks(bs, (done, label) => ReportProgress(done, label));
-            modsListView.EndUpdate();
+            finally
+            {
+                modsListView.EndUpdate();
+                modsListView.Refresh();
+            }
         }
     }
 }

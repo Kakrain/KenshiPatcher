@@ -7,6 +7,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="fernandreu.ScintillaNET" Version="4.2.0" />
+  </ItemGroup>
 	<ItemGroup>
 	  <ProjectReference Include="..\KenshiCore\KenshiCore.csproj" />
 	</ItemGroup>

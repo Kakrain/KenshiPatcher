@@ -1,4 +1,5 @@
 ﻿using KenshiCore;
+using KenshiPatcher;
 using KenshiPatcher.ExpressionReader;
 using static KenshiPatcher.ExpressionReader.IndexExpression;
 
@@ -8,6 +9,7 @@ class Parser
     private Token current;
     private readonly Dictionary<string, int> _precedence = new()
     {
+        { "->", 0 },
         { "||", 1 },
         { "&&", 2 },
         { "==", 3 },{ "!=", 3 },
@@ -29,9 +31,38 @@ class Parser
         else
             throw new Exception($"Expected {type}, got {current.Type}");
     }
-    public IExpression<object> ParseExpression(int minPrecedence = 0)
+    private IExpression<object> ParseGlobalFunctionCall(string funcName)
+    {
+        Eat(TokenType.LParen);
+        var args = new List<IExpression<object>>();
+
+        if (current.Type != TokenType.RParen)
+        {
+            args.Add(ParseExpression());
+            while (current.Type == TokenType.Comma)
+            {
+                Eat(TokenType.Comma);
+                args.Add(ParseExpression());
+            }
+        }
+
+        Eat(TokenType.RParen);
+        return new GlobalFunctionExpression(funcName, args);
+    }
+    public IExpression<object>ParseExpression(int minPrecedence = 0)
     {
         IExpression<object> left;
+        if (current.Type == TokenType.AtSign)
+        {
+            Eat(TokenType.AtSign);
+
+            if (current.Type != TokenType.Identifier)
+                throw new Exception("Expected identifier after '@'");
+
+            string funcName = current.OriginalText!;
+            Eat(TokenType.Identifier);
+            return ParseGlobalFunctionCall(funcName);
+        }
 
         if (current.Type == TokenType.Operator && (current.OriginalText == "-" || current.OriginalText == "!"))
         {
@@ -58,7 +89,17 @@ class Parser
 
             Eat(TokenType.Operator);
             var right = ParseExpression(opPrecedence + 1);
-            left = new BinaryExpression(left, right, op!);
+            //left = new BinaryExpression(left, right, op!);
+            if (op == "->")
+            {
+                // Special case: pipe operator
+                left = new PipeExpression(left as RecordGroupExpression ?? throw new Exception("Left side of '->' must be a Definition"), right as ProcedureExpression?? throw new Exception("Right side of '->' must be a Procedure"));
+            }
+            else
+            {
+                // Normal binary expression
+                left = new BinaryExpression(left, right, op!);
+            }
         }
 
         return left;
@@ -102,7 +143,7 @@ class Parser
                     else if (current.Type == TokenType.LParen)
                         expr = ParseFunctionCall(name);
                     else
-                        expr = new VariableExpression(name); // fallback
+                        expr = Patcher.Instance.definitions[name];
 
                     return ParsePostfix(expr); // handle indexing
                 }
@@ -112,6 +153,28 @@ class Parser
                 Eat(TokenType.RParen);
                 CoreUtils.Print($"[()] Grouped expression => {expr}");
                 break;
+            case TokenType.LBracket:
+                {
+                    Eat(TokenType.LBracket);
+
+                    var elements = new List<IExpression<object>>();
+
+                    if (current.Type != TokenType.RBracket)
+                    {
+                        elements.Add(ParseExpression());
+
+                        while (current.Type == TokenType.Comma)
+                        {
+                            Eat(TokenType.Comma);
+                            elements.Add(ParseExpression());
+                        }
+                    }
+
+                    Eat(TokenType.RBracket);
+
+                    expr = new ArrayExpression(elements);
+                    break;
+                }
 
             default:
                 throw new Exception($"Unexpected token {current.Type} in primary expression");
@@ -140,8 +203,9 @@ class Parser
 
         if (BoolFunctionExpression.functions.ContainsKey(funcName))
             return new ObjectExpression<bool>(new BoolFunctionExpression(funcName, args));
-        else
-            return new FunctionExpression<object>(funcName, args);
+        if (ProcedureExpression.procedures.ContainsKey(funcName))
+            return new ProcedureExpression(funcName, args);
+        return new FunctionExpression<object>(funcName, args);
     }
     private IExpression<object> ParsePostfix(IExpression<object> expr)
     {
@@ -163,7 +227,7 @@ class Parser
 
         return expr;
     }
-
+    
     public Func<ModRecord, object> ParseValueExpression()
     {
         var expr = ParseExpression();

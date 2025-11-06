@@ -22,9 +22,12 @@ namespace KenshiPatcher.ExpressionReader
 
             char c = text[pos];
 
-            //if (char.IsDigit(c) || c == '-') return ReadNumber();
+            if (c == '@')
+            {
+                pos++;
+                return new Token { Type = TokenType.AtSign, OriginalText = "@" };
+            }
             if (char.IsDigit(c)) return ReadNumber();
-            if (c == '-') { pos++; return new Token { Type = TokenType.Operator, OriginalText = "-" }; }
             if (char.IsLetter(c)) return ReadIdentifierOrBool();
             if (c == '"') return ReadString();
             if ("+-*/&|=!><".Contains(c)) return ReadOperator();
@@ -80,7 +83,7 @@ namespace KenshiPatcher.ExpressionReader
             if (pos + 1 < text.Length)
             {
                 string two = text.Substring(pos, 2);
-                if (two == "==" || two == "!=" || two == ">=" || two == "<=" || two == "&&" || two == "||")
+                if (two == "==" || two == "!=" || two == ">=" || two == "<=" || two == "&&" || two == "||" || two == "->")
                 {
                     pos += 2;
                     return new Token { Type = TokenType.Operator, OriginalText = two };

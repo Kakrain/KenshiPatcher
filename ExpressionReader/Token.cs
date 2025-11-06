@@ -16,6 +16,7 @@ namespace KenshiPatcher.ExpressionReader
         DoubleLiteral,  // optional: distinguish double
         StringLiteral,  // "text"
         Operator,       // + or && for example
+        AtSign,
         LParen,
         RParen,
         Comma,
