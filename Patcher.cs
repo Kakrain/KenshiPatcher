@@ -231,28 +231,19 @@ namespace KenshiPatcher
 
             string left = def[0].Trim();
             string right = def[1].Trim();
-
             TrySetValue(left, ParseExpression(right));
         }
         public static IExpression<object> ParseExpression(string text)
         {
             text = text.Trim();
 
-            // 1. Check for record-group using regex
-            var match = GroupPattern.Match(text);
-            if (match.Success)
-            {
-                var group = Patcher.Instance.GetGroup(text);
-                return new RecordGroupExpression(group);
-            }
-
-            // 2. Check for string literal
+            // 1. Check for string literal
             if (text.StartsWith("\"") && text.EndsWith("\"") && text.Length >= 2)
             {
                 return new Literal<object>(text.Substring(1, text.Length - 2));
             }
 
-            // 3. Numeric literal
+            // 2. Numeric literal
             if (double.TryParse(text, System.Globalization.NumberStyles.Float,
                                 System.Globalization.CultureInfo.InvariantCulture, out var dval))
                 return new Literal<object>(dval);
@@ -260,7 +251,7 @@ namespace KenshiPatcher
                                 System.Globalization.CultureInfo.InvariantCulture, out var lval))
                 return new Literal<object>(lval);
 
-            // 4. Table index: table[index]
+            // 3. Table index: table[index]
             int bracket = text.IndexOf('[');
             if (bracket > 0 && text.EndsWith("]"))
             {
@@ -270,9 +261,8 @@ namespace KenshiPatcher
                 IExpression<object> indexExpr = ParseExpression(indexText);
                 return new IndexExpression(tableExpr, indexExpr);
             }
-
-            // 5. Default: treat as variable reference
-            return new VariableExpression(text);
+            var group = Patcher.Instance.GetGroup(text);
+            return new RecordGroupExpression(group);
         }
 
         public void ParseExtraction(string text)
