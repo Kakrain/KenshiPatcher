@@ -91,7 +91,23 @@ namespace KenshiPatcher.ExpressionReader
             { "<", (l, r) => Convert.ToDouble(l)<Convert.ToDouble(r) },
             { ">=", (l, r) => Convert.ToDouble(l)>=Convert.ToDouble(r) },
             { "<=", (l, r) => Convert.ToDouble(l)<=Convert.ToDouble(r) },
-            { "==", (l, r) => l == null && r == null ? true : l == null || r == null ? false : l.Equals(r)  },
+            { "==", (l, r) =>{
+                            if (l == null && r == null) return true;
+                            if (l == null || r == null) return false;
+
+                            bool lIsInt = IsIntegerType(l);
+                            bool rIsInt = IsIntegerType(r);
+                            bool lIsDouble = IsDoubleType(l);
+                            bool rIsDouble = IsDoubleType(r);
+
+                            if (lIsInt && rIsInt)
+                                return AsInt64(l) == AsInt64(r);
+
+                            if ((lIsInt || lIsDouble) && (rIsInt || rIsDouble))
+                                return AsDouble(l) == AsDouble(r);
+
+                            return l.Equals(r);
+                        } },
             { "!=", (l, r) => !(bool)Operators!["=="](l, r) }
 
         };
@@ -262,41 +278,6 @@ namespace KenshiPatcher.ExpressionReader
             return f(ld, rd);
         }
     }
-    public class ComparisonExpression : IExpression<bool>
-    {
-        private readonly IExpression<object> left;
-        private readonly IExpression<object> right;
-        private Func<object, object, bool> comparer;
-        public static readonly Dictionary<string, Func<object, object, bool>> ComparisonOperators = new()
-        {
-            { "==", (l, r) => Equals(l, r) },
-            { "!=", (l, r) => !Equals(l, r) },
-            { ">",  (l, r) => Convert.ToDouble(l) > Convert.ToDouble(r) },
-            { "<",  (l, r) => Convert.ToDouble(l) < Convert.ToDouble(r) },
-            { ">=", (l, r) => Convert.ToDouble(l) >= Convert.ToDouble(r) },
-            { "<=", (l, r) => Convert.ToDouble(l) <= Convert.ToDouble(r) }
-        };
-        public ComparisonExpression(IExpression<object> left, IExpression<object> right, string op)
-        {
-            this.left = left;
-            this.right = right;
-            if (!ComparisonOperators.TryGetValue(op, out var cmp))
-                throw new Exception($"Unknown comparison operator '{op}'");
-            this.comparer = ComparisonOperators[op];
-        }
-        public Func<ModRecord?, bool> GetFunc()
-        {
-            var lf = left.GetFunc();
-            var rf = right.GetFunc();
-            return r =>
-            {
-                var lval = lf(r);
-                var rval = rf(r);
-                if (lval == null || rval == null) return false;
-                return comparer(lval, rval);
-            };
-        }
-    }
     public class FunctionExpression<T> : IExpression<T>
     {
         private readonly List<IExpression<object>> arguments;
@@ -318,8 +299,38 @@ namespace KenshiPatcher.ExpressionReader
 
                         return (T)Convert.ChangeType(r.GetFieldAsObject(fieldName), typeof(T))!;
                     }
+                },
+                { "ToInt", (r, args) =>
+                {
+                    if (args.Count != 1) throw new Exception("ToInt expects exactly one argument");
+                    var val = args[0].GetFunc()(r);
+
+                    object result;
+                    if (val is double d) result = (int)Math.Floor(d);
+                    else if (val is float f) result = (int)Math.Floor(f);
+                    else if (val is int i) result = i;
+                    else if (val is string s && double.TryParse(s, out var parsed)) result = (int)Math.Floor(parsed);
+                    else throw new Exception($"Cannot cast '{val}' to int");
+
+                    return (T)Convert.ChangeType(result, typeof(T))!;
                 }
-            };
+                },
+                { "ToFloat", (r, args) =>
+                    {
+                        if (args.Count != 1) throw new Exception("ToFloat expects exactly one argument");
+                        var val = args[0].GetFunc()(r);
+
+                        object result;
+                        if (val is double d) result = (float)d;
+                        else if (val is float f) result = f;
+                        else if (val is int i) result = i;
+                        else if (val is string s && float.TryParse(s, out var parsed)) result = parsed;
+                        else throw new Exception($"Cannot cast '{val}' to float");
+
+                        return (T)Convert.ChangeType(result, typeof(T))!;
+                    }
+                }
+                };
 
         public FunctionExpression(string funcName, List<IExpression<object>> args)
         {
