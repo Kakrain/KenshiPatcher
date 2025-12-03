@@ -342,14 +342,14 @@ namespace KenshiPatcher
                 return _engCache.Values.ToList(); // all mods loaded
             var result = new List<ReverseEngineer>();
             // Use the shared helper to split safely
-            var names = CoreUtils.SplitModList(selector)
-                .ToHashSet(StringComparer.Ordinal);
+            bool isExclude = selector.StartsWith("*", StringComparison.Ordinal);
+            selector = isExclude ? selector.Substring(1) : selector;
+            var names = CoreUtils.SplitModList(selector).ToHashSet(StringComparer.Ordinal);
             foreach (var kvp in _engCache)
             {
                 var modItem = kvp.Key;
                 var re = kvp.Value;
-
-                if (names.Contains(modItem.Name))
+                if (names.Contains(modItem.Name)!= isExclude)
                     result.Add(re);
             }
             return result;
