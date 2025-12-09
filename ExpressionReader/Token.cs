@@ -17,6 +17,7 @@ namespace KenshiPatcher.ExpressionReader
         StringLiteral,  // "text"
         Operator,       // + or && for example
         AtSign,
+        Lambda,
         LParen,
         RParen,
         Comma,

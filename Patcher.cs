@@ -1,10 +1,7 @@
 ﻿using KenshiCore;
 using KenshiPatcher.ExpressionReader;
-using System;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Windows.Forms;
 
 namespace KenshiPatcher
 {
@@ -174,7 +171,7 @@ namespace KenshiPatcher
                 ParseProcedure(line);
             else if (line.Contains(_proc))
             {
-                printAllDefinitions();
+                //printAllDefinitions();
                 ParseProcedure(line);
             }
             else
@@ -262,6 +259,7 @@ namespace KenshiPatcher
                 return new IndexExpression(tableExpr, indexExpr);
             }
             var group = Patcher.Instance.GetGroup(text);
+            CoreUtils.Print($"Parsed record group with {group.Item2.Count} records.");
             return new RecordGroupExpression(group);
         }
 

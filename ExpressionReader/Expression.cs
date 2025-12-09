@@ -1,6 +1,7 @@
 ﻿using KenshiCore;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
@@ -76,9 +77,9 @@ namespace KenshiPatcher.ExpressionReader
 
     public class BinaryExpression : IExpression<object>
     {
-        private readonly IExpression<object> left;
-        private readonly IExpression<object> right;
-        private readonly string op;
+        public readonly IExpression<object> left;
+        public readonly IExpression<object> right;
+        public readonly string op;
         public static readonly Dictionary<string, Func<object, object, object>> Operators = new()
         {
             { "+", (l, r) => (IsDoubleType(l)||IsDoubleType(r))?AsDouble(l)+AsDouble(r):AsInt64(l)+AsInt64(r)},
@@ -201,8 +202,8 @@ namespace KenshiPatcher.ExpressionReader
     }
     public class UnaryExpression : IExpression<object>
     {
-        private readonly IExpression<object> inner;
-        private readonly string op;
+        public readonly IExpression<object> inner;
+        public readonly string op;
         public static readonly Dictionary<string, Func<object, object>> UnaryOperators = new()
     {
         { "-", (x) => (x is double d) ? -d : (x is int i) ? -i : (x is long l) ? -l : -Convert.ToDouble(x) },
@@ -227,6 +228,22 @@ namespace KenshiPatcher.ExpressionReader
                 throw new Exception($"Unknown unary operator '{sop}'");
             this.op = sop;
         }
+    }
+    public class LiteralExpression : IExpression<object>
+    {
+        private readonly object? value;
+
+        public LiteralExpression(object? val)
+        {
+            value = val;
+        }
+
+        public Func<ModRecord?, object> GetFunc()
+        {
+            return _ => value!;
+        }
+
+        public override string ToString() => value?.ToString() ?? "null";
     }
     public class UnaryMinusExpressionDouble : IExpression<double>
     {
@@ -280,7 +297,7 @@ namespace KenshiPatcher.ExpressionReader
     }
     public class FunctionExpression<T> : IExpression<T>
     {
-        private readonly List<IExpression<object>> arguments;
+        public readonly List<IExpression<object>> arguments;
         private readonly string functionname;
         private readonly Func<ModRecord, T> func;
 
@@ -331,7 +348,10 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
                 };
-
+        public object? InvokeWithEvaluatedArgs(List<IExpression<object>> args)
+{
+    return FunctionExpression<object>.functions[functionname](null!, args);
+}
         public FunctionExpression(string funcName, List<IExpression<object>> args)
         {
             functionname = funcName;
@@ -376,7 +396,8 @@ namespace KenshiPatcher.ExpressionReader
 
         public Func<ModRecord?, object> GetFunc()
         {
-            return r => Name;
+            return r => throw new Exception($"Variable '{Name}' cannot be evaluated outside a lambda");
+            //return r => Name;
         }
         public override string ToString() => $"VariableExpression<{Name}>";
     }
@@ -583,40 +604,39 @@ namespace KenshiPatcher.ExpressionReader
             return sb.ToString();
         }
     }
-        public class PipeExpression : IExpression<object>
+    public class PipeExpression : IExpression<object>
+    {
+        private readonly RecordGroupExpression left;    // left is explicitly a RecordGroupExpression
+        private readonly ProcedureExpression right;     // right is explicitly a ProcedureExpression
+
+        public PipeExpression(RecordGroupExpression left, ProcedureExpression right)
         {
-            private readonly RecordGroupExpression left;    // left is explicitly a RecordGroupExpression
-            private readonly ProcedureExpression right;     // right is explicitly a ProcedureExpression
-
-            public PipeExpression(RecordGroupExpression left, ProcedureExpression right)
-            {
-                this.left = left ?? throw new ArgumentNullException(nameof(left));
-                this.right = right ?? throw new ArgumentNullException(nameof(right));
-            }
-
-            public Func<ModRecord?, object> GetFunc()
-            {
-                var leftFunc = left.GetFunc();
-
-                return record =>
-                {
-                    var leftValue = leftFunc(record);
-
-                    if (leftValue is not (List<string> names, List<ModRecord> records))
-                        throw new Exception("PipeExpression: left side must evaluate to a record group (List<string>, List<ModRecord>)");
-
-                    right.SetTarget((names, records));
-                    var procFunc = right.GetFunc();
-                    procFunc(record);
-                    return leftValue;
-                };
-            }
-            public override string ToString()
-            {
-                return $"PipeExpression({left} -> {right})";
-            }
+            this.left = left ?? throw new ArgumentNullException(nameof(left));
+            this.right = right ?? throw new ArgumentNullException(nameof(right));
         }
-    
+
+        public Func<ModRecord?, object> GetFunc()
+        {
+            var leftFunc = left.GetFunc();
+
+            return record =>
+            {
+                var leftValue = leftFunc(record);
+
+                if (leftValue is not (List<string> names, List<ModRecord> records))
+                    throw new Exception("PipeExpression: left side must evaluate to a record group (List<string>, List<ModRecord>)");
+
+                right.SetTarget((names, records));
+                var procFunc = right.GetFunc();
+                procFunc(record);
+                return leftValue;
+            };
+        }
+        public override string ToString()
+        {
+            return $"PipeExpression({left} -> {right})";
+        }
+    }
     public class ProcedureExpression : IExpression<object>
     {
         private readonly string procedureName;
@@ -682,7 +702,56 @@ namespace KenshiPatcher.ExpressionReader
                     Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
                     return null;
                 }
-            }
+            },
+                {
+                    "EditExtraData", (targetGroup, args) =>
+                    {
+                        // args[0] = category
+                        if (!(args[0].GetFunc()(null) is string category))
+                            throw new FormatException($"Invalid category: ({args[0]})");
+
+                        // args[1] = array of lambdas  [x=>x, x=>x+10, ...]
+                        object? arrObj = args[1].GetFunc()(null);
+                        if (arrObj is not Array lambdaArray)
+                            throw new FormatException("EditExtraData: second argument must be an array of lambdas");
+
+                        List<Func<int,int>> transformers = new();
+
+                        foreach (var element in lambdaArray)
+                        {
+                            if (element is not Func<object?[], object?> lambdaFactory)
+                                throw new FormatException($"Array element is not a lambda: {element}");
+
+                            Func<int,int> transformer = x =>
+                            {
+                                var result = lambdaFactory(new object?[] { x });
+
+                                if (result is int i) return i;
+
+                                if (result is long l) return (int)l;
+
+                                if (result is double d && Math.Abs(d % 1) < double.Epsilon)
+                                    return (int)d;
+
+                                throw new FormatException($"Lambda did not return int: {result}");
+                            };
+
+                            transformers.Add(transformer);
+                        }
+
+                        // Now we have transformers: List<Func<int,int>>
+                        foreach (var record in targetGroup.Item2)
+                        {
+                            Patcher.Instance.currentRE!.EditExtraData(
+                                record,
+                                category,
+                                transformers.ToArray()
+                            );
+                        }
+
+                        return null;
+                    }
+                }
             };
 
         public ProcedureExpression(string name, List<IExpression<object>> args)
@@ -710,6 +779,101 @@ namespace KenshiPatcher.ExpressionReader
                 throw new Exception("ProcedureExpression has no target");
 
             return _ => func(target.Value);
+        }
+    }
+    public class LambdaExpression : IExpression<object>
+    {
+        public List<string> Parameters { get; }
+        public IExpression<object> Body { get; }
+
+        public LambdaExpression(List<string> parameters, IExpression<object> body)
+        {
+            Parameters = parameters;
+            Body = body;
+        }
+        public Func<ModRecord?, object> GetFunc()
+        {
+            return _ =>
+            {
+                return new Func<object?[], object?>(args =>
+                {
+                    if (args.Length != Parameters.Count)
+                        throw new Exception($"Lambda: expected {Parameters.Count} args, got {Parameters.Count}");
+                    var local = new Dictionary<string, object?>();
+
+                    for (int i = 0; i < Parameters.Count; i++)
+                        local[Parameters[i]] = args[i];
+
+                    var result = EvaluateWithLocalScope(Body, local);
+
+                    if (result is long l)
+                        return (int)l;
+
+                    if (result is double d && Math.Abs(d % 1) < double.Epsilon)
+                        return (int)d;
+
+                    return result;
+                });
+            };
+        }
+        private object? EvaluateWithLocalScope(IExpression<object> expr, Dictionary<string, object?> locals)
+        {
+            // Variable -> lookup locals
+            if (expr is VariableExpression v)
+            {
+                if (locals.TryGetValue(v.Name, out var val))
+                    return val;
+                throw new Exception($"Unknown variable '{v.Name}'");
+            }
+
+            // Binary -> evaluate children recursively and apply operator
+            if (expr is BinaryExpression b)
+            {
+                var leftVal = EvaluateWithLocalScope(b.left, locals);
+                var rightVal = EvaluateWithLocalScope(b.right, locals);
+
+                if (!BinaryExpression.Operators.TryGetValue(b.op, out var binOp))
+                    throw new Exception($"Unknown binary operator '{b.op}'");
+
+                return binOp(leftVal!, rightVal!);
+            }
+
+            // Unary -> evaluate inner and apply operator
+            if (expr is UnaryExpression u)
+            {
+                var innerVal = EvaluateWithLocalScope(u.inner, locals);
+
+                if (!UnaryExpression.UnaryOperators.TryGetValue(u.op, out var unOp))
+                    throw new Exception($"Unknown unary operator '{u.op}'");
+
+                return unOp(innerVal!);
+            }
+            if (expr is FunctionExpression<object> fexpr)
+            {
+                var evaluatedArgs = new List<IExpression<object>>();
+
+                foreach (var arg in fexpr.arguments)
+                {
+                    var value = EvaluateWithLocalScope(arg, locals);
+                    evaluatedArgs.Add(new LiteralExpression(value));
+                }
+
+                return fexpr.InvokeWithEvaluatedArgs(evaluatedArgs);
+            }
+            try
+            {
+                return expr.GetFunc()(null);
+            }
+            catch (Exception ex)
+            {
+                // Improve diagnostics if something goes wrong during fallback evaluation
+                throw new Exception($"Error evaluating expression of type {expr.GetType().Name} inside lambda: {ex.Message}", ex);
+            }
+        }
+
+        public override string ToString()
+        {
+            return $"Lambda({string.Join(", ", Parameters)} => {Body})";
         }
     }
     public class GlobalFunctionExpression : IExpression<object>

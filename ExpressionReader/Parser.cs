@@ -2,11 +2,15 @@
 using KenshiPatcher;
 using KenshiPatcher.ExpressionReader;
 using static KenshiPatcher.ExpressionReader.IndexExpression;
+using static System.Net.Mime.MediaTypeNames;
 
 class Parser
 {
     private Lexer lexer;
     private Token current;
+    private Token next;
+    private readonly HashSet<string> localParameters = new(StringComparer.Ordinal);
+
     private readonly Dictionary<string, int> _precedence = new()
     {
         { "->", 0 },
@@ -21,16 +25,32 @@ class Parser
     public Parser(string text)
     {
         lexer = new Lexer(text);
-        current = lexer.Next();
+        next = lexer.Next();
+        current = next;
+        Advance();
+    }
+    private void Advance()
+    {
+        current = next;
+        next = lexer.Next();
     }
 
+    private void Eat(TokenType type)
+    {
+        if (current.Type != type)
+            throw new Exception($"Expected {type}, got {current.Type}");
+
+        Advance();
+    }
+
+    /*
     private void Eat(TokenType type)
     {
         if (current.Type == type)
             current = lexer.Next();
         else
             throw new Exception($"Expected {type}, got {current.Type}");
-    }
+    }*/
     private IExpression<object> ParseGlobalFunctionCall(string funcName)
     {
         Eat(TokenType.LParen);
@@ -136,10 +156,18 @@ class Parser
             case TokenType.Identifier:
                 {
                     string name = current.OriginalText!;
+                    if (next.Type == TokenType.Operator && next.OriginalText == "=>")
+                        return ParseLambda();
+                    if (localParameters.Contains(name))
+                    {
+                        Eat(TokenType.Identifier);
+                        expr = new VariableExpression(name);
+                        return ParsePostfix(expr);
+                    }
                     Eat(TokenType.Identifier);
 
                     if (current.Type == TokenType.LBracket)
-                        expr = new TableNameExpression(name);  // table name literal
+                        expr = new TableNameExpression(name);
                     else if (current.Type == TokenType.LParen)
                         expr = ParseFunctionCall(name);
                     else
@@ -181,7 +209,39 @@ class Parser
         }
         return ParsePostfix(expr);
     }
-    
+    private IExpression<object> ParseLambda()
+    {
+        // Parameter name
+        string paramName = current.OriginalText!;
+        Eat(TokenType.Identifier);
+
+        if (current.Type != TokenType.Operator || current.OriginalText != "=>")
+            throw new Exception("Expected => in lambda expression");
+        Eat(TokenType.Operator); // because => is lexed as Operator
+
+        bool added = localParameters.Add(paramName);
+
+        try
+        {
+            // parse lambda body
+            var body = ParseExpression();
+            return new LambdaExpression(new List<string> { paramName }, body);
+        }
+        finally
+        {
+            // remove the parameter we added (if we added it)
+            if (added) localParameters.Remove(paramName);
+        }
+
+
+
+
+
+        // Parse body (full expression)
+        //var body = ParseExpression();
+
+       // return new LambdaExpression(new List<string> { paramName }, body);
+    }
     private IExpression<object> ParseFunctionCall(string funcName)
     {
         Eat(TokenType.LParen);
