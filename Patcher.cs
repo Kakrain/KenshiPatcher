@@ -20,8 +20,8 @@ namespace KenshiPatcher
             }
         }
         private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
-        public Dictionary<string, IExpression<object>> definitions=new();
-        public Dictionary<string, Dictionary<string, IExpression<object>>> tables = new();
+        public Dictionary<string, Expression<object>> definitions=new();
+        public Dictionary<string, Dictionary<string, Expression<object>>> tables = new();
         private readonly string _definition = ":=";
         private readonly string _proc = "->";
         private readonly string _comment = ";";
@@ -40,7 +40,7 @@ namespace KenshiPatcher
             tables = new();
             _instance = this;
         }
-        public bool TryResolve(string name, out IExpression<object>? expr)
+        public bool TryResolve(string name, out Expression<object>? expr)
         {
             if (definitions.TryGetValue(name, out expr))
                 return true;
@@ -54,7 +54,7 @@ namespace KenshiPatcher
             expr = null!;
             return false;
         }
-        public void Define(string name, IExpression<object> expr)
+        public void Define(string name, Expression<object> expr)
         {
             definitions[name] = expr;
         }
@@ -123,8 +123,8 @@ namespace KenshiPatcher
             foreach (var def in definitions)
             {
                 var expr = def.Value;
-                var func = expr.GetFunc();
-                var result = func(null); // or some context ModRecord
+                //var func = expr.GetFunc();
+                var result = expr.Evaluate(null);//func(null); // or some context ModRecord
 
                 if (result is ValueTuple<List<string>, List<ModRecord>> group)
                 {
@@ -181,7 +181,7 @@ namespace KenshiPatcher
         {
             CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
         }
-        private void TrySetValue(string left, IExpression<object> expr)
+        private void TrySetValue(string left, Expression<object> expr)
         {
             // Detect if left side looks like table[index]
             var match = Regex.Match(left, @"^(\w+)\s*\[\s*([^\]]+)\s*\]$");
@@ -192,7 +192,7 @@ namespace KenshiPatcher
 
                 if (!tables.TryGetValue(tableName, out var table))
                 {
-                    table = new Dictionary<string, IExpression<object>>();
+                    table = new Dictionary<string, Expression<object>>();
                     tables[tableName] = table;
                 }
 
@@ -230,7 +230,7 @@ namespace KenshiPatcher
             string right = def[1].Trim();
             TrySetValue(left, ParseExpression(right));
         }
-        public static IExpression<object> ParseExpression(string text)
+        public static Expression<object> ParseExpression(string text)
         {
             text = text.Trim();
 
@@ -254,8 +254,8 @@ namespace KenshiPatcher
             {
                 string tableName = text.Substring(0, bracket).Trim();
                 string indexText = text.Substring(bracket + 1, text.Length - bracket - 2).Trim();
-                IExpression<object> tableExpr = new IndexExpression.TableNameExpression(tableName);
-                IExpression<object> indexExpr = ParseExpression(indexText);
+                Expression<object> tableExpr = new IndexExpression.TableNameExpression(tableName);
+                Expression<object> indexExpr = ParseExpression(indexText);
                 return new IndexExpression(tableExpr, indexExpr);
             }
             var group = Patcher.Instance.GetGroup(text);
@@ -289,8 +289,8 @@ namespace KenshiPatcher
                 throw new InvalidOperationException($"Unknown source definition '{oldDefinitionSource}'.");
 
             // Get the actual (names, records)
-            var func = expr.GetFunc();
-            var (modNames, modRecords) = ((List<string>, List<ModRecord>))func(null);
+            //var func = expr.//GetFunc();
+            var (modNames, modRecords) = ((List<string>, List<ModRecord>))expr.Evaluate(null)!;//func
 
             // Parse the condition
             CoreUtils.Print($"Parsing extraction condition: {condition}");
@@ -328,11 +328,11 @@ namespace KenshiPatcher
         }
         public void ParseProcedure(string text)
         {
-
             CoreUtils.Print($"Executing procedure: {text}");
             var parser = new Parser(text);
             var expr = parser.ParseExpression();
-            expr.GetFunc()(null);
+           // expr.GetFunc()(null);
+            expr.Evaluate(null);
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
         {

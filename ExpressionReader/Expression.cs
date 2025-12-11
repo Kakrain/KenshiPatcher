@@ -1,161 +1,145 @@
 ﻿using KenshiCore;
+using System.Diagnostics;
+using System.Linq.Expressions;
 using System.Text;
 using System.Xml.Linq;
 
 namespace KenshiPatcher.ExpressionReader
 {
+
     public static class ExpressionUtils
     { 
-        public static string ExpectString(IExpression<object> expression,ModRecord? r=null)
+        public static string ExpectString(Expression<object> expression,ModRecord? r=null)
         {
-            object o = expression.GetFunc()(r);
+            object o = expression.Evaluate(r)!;
             if (o is string s)
                 return s;
             throw new FormatException($"Expression is expected to be a string: {expression.ToString()}");
         }
-        public static (List<string>,List<ModRecord>) ExpectGroupRecord(IExpression<object>expression, ModRecord? r = null)
+        public static (List<string>,List<ModRecord>) ExpectGroupRecord(Expression<object>expression, ModRecord? r = null)
         {
-            object o = expression.GetFunc()(r);
+            object o = expression.Evaluate(r)!;
             if (o is (List<string> names, List<ModRecord> records))
                 return (names, records);
             throw new FormatException($"Expression is expected to be a group: {expression.ToString()}");
         }
-        public static Array ExpectArray(IExpression<object> expression, ModRecord? r = null)
+        public static Array ExpectArray(Expression<object> expression, ModRecord? r = null)
         {
-            object arrObj = expression.GetFunc()(r);
+            object arrObj = expression.Evaluate(r)!;
             if (arrObj is Array arr)
                 return arr;  
             throw new FormatException("EditExtraData: second argument must be an array");
         }
-        public static Func<object?[], object?> ExpectLambda(IExpression<object> expression, ModRecord? r = null)
+        public static Func<object?[], object?> ExpectLambda(Expression<object> expression, ModRecord? r = null)
         {
-            object arrObj = expression.GetFunc()(r);
+            object arrObj = expression.Evaluate(r)!;
             if (arrObj is Func<object?[], object?> lambdaArray)
                 return lambdaArray;
             throw new FormatException("EditExtraData: second argument must be a lambda");
         }
-
-        
-
     }
-
-    public interface IExpression<T>
+    [DebuggerDisplay("{ToString()}")]
+    public abstract class Expression
     {
-        Func<ModRecord?, T> GetFunc();
+        public abstract object? Evaluate(ModRecord? r);
     }
-    public class Literal<T> : IExpression<T>
+    [DebuggerDisplay("{ToString()}")]
+    public abstract class Expression<T> : Expression
+    {
+        public abstract T EvaluateTyped(ModRecord? r);
+
+        public override object? Evaluate(ModRecord? r)
+            => EvaluateTyped(r);
+    }
+
+    [DebuggerDisplay("{ToString()}")]
+    public sealed class Literal<T> : Expression<T>
     {
         private readonly T value;
+
         public Literal(T value) => this.value = value;
 
-        public Func<ModRecord?, T> GetFunc() => _ => value;
+        public override T EvaluateTyped(ModRecord? r) => value;
+
         public override string ToString()
         {
-            return $"Literal<{ value?.ToString() ?? "null"}>";
+            return $"Literal<{value?.ToString() ?? "null"}>";
         }
-    }
-    class NotExpression : IExpression<bool>
-    {
-        private readonly IExpression<bool> inner;
-        public NotExpression(IExpression<bool> inner) => this.inner = inner;
 
-        public Func<ModRecord?, bool> GetFunc()
-        {
-            var innerFunc = inner.GetFunc();
-            return r => !innerFunc(r);
-        }
     }
-    class ObjectExpression<T> : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    class ObjectExpression<T> : Expression<object?>
     {
-        private readonly IExpression<T> inner;
-        public ObjectExpression(IExpression<T> inner) => this.inner = inner;
+        private readonly Expression<T> inner;
 
-        public Func<ModRecord?, object> GetFunc()
-        {
-            var func = inner.GetFunc();
-            return r => (object)func(r)!;
-        }
+        public ObjectExpression(Expression<T> inner) => this.inner = inner;
+
+        public override object? EvaluateTyped(ModRecord? r)
+        => inner.EvaluateTyped(r);
+
         public override string ToString()
         {
             return this.inner.ToString()!;
         }
     }
 
-    public class BinaryExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public sealed class BinaryExpression : Expression<object>
     {
-        public readonly IExpression<object> left;
-        public readonly IExpression<object> right;
+        public readonly Expression<object> left;
+        public readonly Expression<object> right;
         public readonly string op;
         public static readonly Dictionary<string, Func<object, object, object>> Operators = new()
         {
-            { "+", (l, r) => (IsDoubleType(l)||IsDoubleType(r))?AsDouble(l)+AsDouble(r):AsInt64(l)+AsInt64(r)},
-            { "-", (l, r) => (IsDoubleType(l)||IsDoubleType(r))?AsDouble(l)-AsDouble(r):AsInt64(l)-AsInt64(r)},
-            { "*", (l, r) => (IsDoubleType(l)||IsDoubleType(r))?AsDouble(l)*AsDouble(r):AsInt64(l)*AsInt64(r)},
-            { "/", (l, r) => (IsIntegerType(l)&&IsIntegerType(r)&&((AsInt64(l)%AsInt64(r)) == 0))?AsInt64(l)/AsInt64(r):AsDouble(l)/AsDouble(r)},
-            { "&&", (l, r) => Convert.ToBoolean(l)&&Convert.ToBoolean(r) },
-            { "||", (l, r) => Convert.ToBoolean(l)||Convert.ToBoolean(r) },
-            { ">", (l, r) => Convert.ToDouble(l)>Convert.ToDouble(r) },
-            { "<", (l, r) => Convert.ToDouble(l)<Convert.ToDouble(r) },
-            { ">=", (l, r) => Convert.ToDouble(l)>=Convert.ToDouble(r) },
-            { "<=", (l, r) => Convert.ToDouble(l)<=Convert.ToDouble(r) },
-            { "==", (l, r) =>{
-                            if (l == null && r == null) return true;
-                            if (l == null || r == null) return false;
+            { "+", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) + ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) + ValueCaster.ToInt64(r) },
+            { "-", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) - ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) - ValueCaster.ToInt64(r) },
+            { "*", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) * ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) * ValueCaster.ToInt64(r) },
+            { "/", (l, r) =>
+                    {
+                        // if both integer-like and divisible -> integer division; otherwise floating division
+                        if (ValueCaster.IsIntegerLike(l) && ValueCaster.IsIntegerLike(r))
+                        {
+                            var il = ValueCaster.ToInt64(l);
+                            var ir = ValueCaster.ToInt64(r);
+                            if (ir == 0) throw new DivideByZeroException();
+                            if (il % ir == 0) return il / ir;
+                            return (double)il / (double)ir;
+                        }
+                        return ValueCaster.ToDouble(l) / ValueCaster.ToDouble(r);
+                    }
+            },
+            { "&&", (l, r) => Convert.ToBoolean(l) && Convert.ToBoolean(r) },
+            { "||", (l, r) => Convert.ToBoolean(l) || Convert.ToBoolean(r) },
+            { ">", (l, r) => ValueCaster.ToDouble(l) > ValueCaster.ToDouble(r) },
+            { "<", (l, r) => ValueCaster.ToDouble(l) < ValueCaster.ToDouble(r) },
+            { ">=", (l, r) => ValueCaster.ToDouble(l) >= ValueCaster.ToDouble(r) },
+            { "<=", (l, r) => ValueCaster.ToDouble(l) <= ValueCaster.ToDouble(r) },
+            { "==", (l, r) =>
+                {
+                    if (l == null && r == null) return true;
+                    if (l == null || r == null) return false;
 
-                            bool lIsInt = IsIntegerType(l);
-                            bool rIsInt = IsIntegerType(r);
-                            bool lIsDouble = IsDoubleType(l);
-                            bool rIsDouble = IsDoubleType(r);
+                    bool lIsInt = ValueCaster.IsIntegerLike(l);
+                    bool rIsInt = ValueCaster.IsIntegerLike(r);
+                    bool lIsFloat = ValueCaster.IsFloatingLike(l);
+                    bool rIsFloat = ValueCaster.IsFloatingLike(r);
 
-                            if (lIsInt && rIsInt)
-                                return AsInt64(l) == AsInt64(r);
+                    if (lIsInt && rIsInt)
+                        return ValueCaster.ToInt64(l) == ValueCaster.ToInt64(r);
 
-                            if ((lIsInt || lIsDouble) && (rIsInt || rIsDouble))
-                                return AsDouble(l) == AsDouble(r);
+                    if ((lIsInt || lIsFloat) && (rIsInt || rIsFloat))
+                        return Math.Abs(ValueCaster.ToDouble(l) - ValueCaster.ToDouble(r)) < double.Epsilon;
 
-                            return l.Equals(r);
-                        } },
+                    return l.Equals(r);
+                }
+            },
             { "!=", (l, r) => !(bool)Operators!["=="](l, r) },
             { "%", (l, r) =>
-                (BinaryExpression.IsIntegerType(l) && BinaryExpression.IsIntegerType(r))
-                    ? BinaryExpression.AsInt64(l) % BinaryExpression.AsInt64(r)
-                    : BinaryExpression.AsDouble(l) % BinaryExpression.AsDouble(r)
+                (ValueCaster.IsIntegerLike(l) && ValueCaster.IsIntegerLike(r))
+                    ? ValueCaster.ToInt64(l) % ValueCaster.ToInt64(r)
+                    : (long)(ValueCaster.ToDouble(l) % ValueCaster.ToDouble(r))
             }
-
         };
-        private static bool IsIntegerType(object value)
-        {
-            if (value is sbyte or byte or short or ushort or int or uint or long or ulong)
-                return true;
-
-            if (value is string s)
-            {
-                // Try parsing as integer (invariant culture, no decimals allowed)
-                return long.TryParse(
-                    s,
-                    System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out _);
-            }
-
-            return false;
-        }
-        private static bool IsDoubleType(object value)
-        {
-            if (value is float or double)
-                return true;
-
-            if (value is string s)
-            {
-                return double.TryParse(
-                    s,
-                    System.Globalization.NumberStyles.Float | System.Globalization.NumberStyles.AllowThousands,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out _);
-            }
-
-            return false;
-        }
         public static double AsDouble(object value)
         {
             if (value is double d) return d;
@@ -173,66 +157,36 @@ namespace KenshiPatcher.ExpressionReader
             }
             throw new Exception($"Cannot convert '{value}' to double");
         }
-
-        private static long AsInt64(object value)
-        {
-            if (value is long l) return l;
-            if (value is int i) return i;
-            if (value is string s && long.TryParse(
-                s, System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var parsed))
-                return parsed;
-
-            // If it’s a double but whole (e.g., 4.0) we can still treat it as int
-            if (value is double d && Math.Abs(d % 1) < double.Epsilon)
-                return (long)d;
-
-            throw new Exception($"Cannot convert '{value}' to integer");
-        }
-        public Func<ModRecord?, object> GetFunc()
-        {
-            var lf = left.GetFunc();
-            var rf = right.GetFunc();
-            return r =>
-            {
-                var lval = lf(r);
-                var rval = rf(r);
-                return Operators[op](lval, rval);
-            };
-        }
+        public override object EvaluateTyped(ModRecord? r) => Operators[op](left.Evaluate(r)!, right.Evaluate(r)!);
         public override string ToString()
         {
             return $"BinaryExpression<{left.ToString()} {op} {right.ToString()}>";
         }
-        public BinaryExpression(IExpression<object> left, IExpression<object> right,string sop)
+        public BinaryExpression(Expression<object> left, Expression<object> right,string sop)
         {
             this.left = left;
             this.right = right;
             this.op = sop;
         }
     }
-    public class UnaryExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public sealed class UnaryExpression : Expression<object>
     {
-        public readonly IExpression<object> inner;
+        public readonly Expression<object> inner;
         public readonly string op;
         public static readonly Dictionary<string, Func<object, object>> UnaryOperators = new()
     {
         { "-", (x) => (x is double d) ? -d : (x is int i) ? -i : (x is long l) ? -l : -Convert.ToDouble(x) },
         { "!", (x) => !Convert.ToBoolean(x) }
     };
+        public override object EvaluateTyped(ModRecord? r) => UnaryOperators[op](inner.Evaluate(r)!);
 
-        public Func<ModRecord?, object> GetFunc()
-        {
-            var innerFunc = inner.GetFunc();
-
-            CoreUtils.Print($"Creating unary expression {this.ToString()}");
-            return r => UnaryOperators[op](innerFunc(r));
-        }
         public override string ToString()
         {
             return $"({op} {inner.ToString()})";
         }
-        public UnaryExpression(IExpression<object> inner, string sop)
+
+        public UnaryExpression(Expression<object> inner, string sop)
         {
             this.inner = inner;
             if (!UnaryOperators.TryGetValue(sop, out var  v))
@@ -240,7 +194,8 @@ namespace KenshiPatcher.ExpressionReader
             this.op = sop;
         }
     }
-    public class LiteralExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public class LiteralExpression : Expression<object>
     {
         private readonly object? value;
 
@@ -248,42 +203,26 @@ namespace KenshiPatcher.ExpressionReader
         {
             value = val;
         }
+        public override object EvaluateTyped(ModRecord? r) => value!;
 
-        public Func<ModRecord?, object> GetFunc()
-        {
-            return _ => value!;
-        }
 
         public override string ToString() => value?.ToString() ?? "null";
     }
-    public class UnaryMinusExpressionDouble : IExpression<double>
+    [DebuggerDisplay("{ToString()}")]
+    public class FunctionExpression<T> : Expression<T>
     {
-        private readonly IExpression<double> inner;
-        public UnaryMinusExpressionDouble(IExpression<double> inner) { this.inner = inner; }
-        public Func<ModRecord?, double> GetFunc() { var innerFunc = inner.GetFunc(); return r => -innerFunc(r); }
-    }
-    public class UnaryMinusExpressionInt : IExpression<int>
-    {
-        private readonly IExpression<int> inner;
-        public UnaryMinusExpressionInt(IExpression<int> inner) { this.inner = inner; }
-        public Func<ModRecord?, int> GetFunc() { var innerFunc = inner.GetFunc(); return r => -innerFunc(r); }
-    }
-    public class FunctionExpression<T> : IExpression<T>
-    {
-        public readonly List<IExpression<object>> arguments;
+        public readonly List<Expression<object>> arguments;
         private readonly string functionname;
         private readonly Func<ModRecord, T> func;
 
-        public static readonly Dictionary<string, Func<ModRecord, List<IExpression<object>>, T>> functions =
+        public static readonly Dictionary<string, Func<ModRecord, List<Expression<object>>, T>> functions =
             new()
             {
                 { "GetField", (r, args) =>
                     {
                         if (args.Count != 1)
                             throw new Exception("GetField() expects exactly one argument");
-
-                        var argFunc = args[0].GetFunc();
-                        var fieldName = argFunc(r)?.ToString();
+                        var fieldName = args[0].Evaluate(r)!.ToString();
                         if (fieldName == null)
                             throw new Exception("GetField(): argument evaluated to null");
 
@@ -291,33 +230,38 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 },
                 { "ToInt", (r, args) =>
-                {
-                    if (args.Count != 1) throw new Exception("ToInt expects exactly one argument");
-                    var val = args[0].GetFunc()(r);
+                    {
+                        if (args.Count != 1) throw new Exception("ToInt expects exactly one argument");
+                        var val = args[0].Evaluate(r);
 
-                    object result;
-                    if (val is double d) result = (int)Math.Floor(d);
-                    else if (val is float f) result = (int)Math.Floor(f);
-                    else if (val is int i) result = i;
-                    else if (val is string s && double.TryParse(s, out var parsed)) result = (int)Math.Floor(parsed);
-                    else throw new Exception($"Cannot cast '{val}' to int");
-
-                    return (T)Convert.ChangeType(result, typeof(T))!;
-                }
+                        try
+                        {
+                            var intVal = ValueCaster.ToInt64(val!);
+                            return (T)Convert.ChangeType(intVal, typeof(T))!;
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new Exception($"ToInt: cannot convert value of type '{val?.GetType().FullName ?? "null"}' (ToString()='{val}') to int: {ex.Message}", ex);
+                        }
+                    }
                 },
                 { "ToFloat", (r, args) =>
                     {
-                        if (args.Count != 1) throw new Exception("ToFloat expects exactly one argument");
-                        var val = args[0].GetFunc()(r);
-
-                        object result;
-                        if (val is double d) result = (float)d;
-                        else if (val is float f) result = f;
-                        else if (val is int i) result = i;
-                        else if (val is string s && float.TryParse(s, out var parsed)) result = parsed;
-                        else throw new Exception($"Cannot cast '{val}' to float");
-
-                        return (T)Convert.ChangeType(result, typeof(T))!;
+                        if (args.Count != 1)
+                            throw new Exception("ToFloat expects exactly one argument");
+                        var val = args[0].Evaluate(r);
+                        try
+                        {
+                            var floatVal = ValueCaster.ToDouble(val!);
+                            return (T)Convert.ChangeType((float)floatVal, typeof(T))!;
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new Exception(
+                                $"ToFloat: cannot convert value of type '{val?.GetType().FullName ?? "null"}' (ToString()='{val}') to float: {ex.Message}",
+                                ex
+                            );
+                        }
                     }
                 },
                 { "Min", (r, args) =>
@@ -342,9 +286,8 @@ namespace KenshiPatcher.ExpressionReader
                 },
                 { "ArrIndex", (r, args) =>
                     {
-                        // evaluate arguments
-                        var arrObj = args[0].GetFunc()(r);
-                        var indexObj = args[1].GetFunc()(r);
+                        var arrObj = args[0].Evaluate(r);
+                        var indexObj = args[1].Evaluate(r);
 
                         int index = Convert.ToInt32(indexObj);
 
@@ -370,11 +313,11 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
                 };
-        public object? InvokeWithEvaluatedArgs(List<IExpression<object>> args)
+        public object? InvokeWithEvaluatedArgs(List<Expression<object>> args)
         {
             return FunctionExpression<object>.functions[functionname](null!, args);
         }
-        public FunctionExpression(string funcName, List<IExpression<object>> args)
+        public FunctionExpression(string funcName, List<Expression<object>> args)
         {
             functionname = funcName;
             arguments = args;
@@ -386,97 +329,48 @@ namespace KenshiPatcher.ExpressionReader
         }
         public override string ToString() => $"FunctionExpression<{functionname}>";
 
-        public Func<ModRecord?, T> GetFunc() => func!;
+        public override T EvaluateTyped(ModRecord? r) => func(r!);
 
     }
-
-        public class TernaryExpression : IExpression<object>
-    {
-        private readonly IExpression<bool> condition;
-        private readonly IExpression<object> trueExpr;
-        private readonly IExpression<object> falseExpr;
-
-        public TernaryExpression(IExpression<bool> condition, IExpression<object> trueExpr, IExpression<object> falseExpr)
-        {
-            this.condition = condition;
-            this.trueExpr = trueExpr;
-            this.falseExpr = falseExpr;
-        }
-
-        public Func<ModRecord?, object> GetFunc()
-        {
-            var condFunc = condition.GetFunc();
-            var trueFunc = trueExpr.GetFunc();
-            var falseFunc = falseExpr.GetFunc();
-
-            return record => condFunc(record) ? trueFunc(record) : falseFunc(record);
-        }
-    }
-    public class VariableExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public class VariableExpression : Expression<object>
     {
         public string Name { get; }
         public VariableExpression(string name) => Name = name;
 
-        public Func<ModRecord?, object> GetFunc()
-        {
-            return r => throw new Exception($"Variable '{Name}' cannot be evaluated outside a lambda");
-            //return r => Name;
-        }
+        public override object EvaluateTyped(ModRecord? r) => throw new Exception($"Variable '{Name}' cannot be evaluated outside a lambda");
+
         public override string ToString() => $"VariableExpression<{Name}>";
     }
-    public class ArrayExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public class ArrayExpression : Expression<object>
     {
-        public readonly List<IExpression<object>> elements;
+        public readonly List<Expression<object>> elements;
 
-        public ArrayExpression(List<IExpression<object>> elements)
+        public ArrayExpression(List<Expression<object>> elements)
         {
             this.elements = elements;
         }
-        public Func<ModRecord?, object> GetFunc()
-        {
-            return record =>
-            {
-                object?[] values = new object?[elements.Count];
-                for (int i = 0; i < elements.Count; i++)
-                    values[i] = elements[i].GetFunc()(record);
 
-                return values;
-            };
+        public override object EvaluateTyped(ModRecord? r)
+        {
+            object?[] values = new object?[elements.Count];
+            for (int i = 0; i < elements.Count; i++)
+                values[i] = elements[i].Evaluate(r);
+            return values;
         }
-
-        /*public Func<ModRecord?, object> GetFunc()
-        {
-            var funcs = elements.Select(e => e.GetFunc()).ToList();
-
-            return record =>
-            {
-                if (funcs.Count == 0) return Array.Empty<object>();
-                var values = funcs.Select(f => f(record)).ToList();
-                Type elementType = values[0]?.GetType() ?? typeof(object);
-                foreach (var val in values)
-                {
-                    if (val == null) continue; // optional: treat null as compatible
-                    if (val.GetType() != elementType)
-                        throw new FormatException($"ArrayExpression elements have mixed types: {elementType} vs {val.GetType()}");
-                }
-                Array array = Array.CreateInstance(elementType, values.Count);
-                for (int i = 0; i < values.Count; i++)
-                    array.SetValue(values[i], i);
-
-                return array;
-            };
-        }*/
 
         public override string ToString()
         {
             return $"Array[{string.Join(", ", elements)}]";
         }
     }
-    public class BoolFunctionExpression : IExpression<bool>
+    [DebuggerDisplay("{ToString()}")]
+    public class BoolFunctionExpression : Expression<bool>
     {
         private readonly Func<ModRecord, bool> func;
 
-        public static readonly Dictionary<string, Func<ModRecord, List<IExpression<object>>, bool>> functions =
+        public static readonly Dictionary<string, Func<ModRecord, List<Expression<object>>, bool>> functions =
             new()
             {
             { "true", (_, __) => true },
@@ -485,7 +379,7 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     if (args.Count != 1)
                         throw new Exception("FieldExist expects exactly one argument");
-                    string? field = args[0].GetFunc()(r)?.ToString();
+                    string? field = args[0].Evaluate(r)!.ToString();
                     return !string.IsNullOrEmpty(field) && r.HasField(field);
                 }
             },
@@ -493,7 +387,7 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     if (args.Count != 1)
                         throw new Exception("FieldIsNotEmpty expects exactly one argument");
-                    string? field = args[0].GetFunc()(r)?.ToString();
+                    string? field = args[0].Evaluate(r)!.ToString();
                     return !string.IsNullOrEmpty(field) && !string.IsNullOrEmpty(r.GetFieldAsString(field));
                 }
             },
@@ -501,9 +395,9 @@ namespace KenshiPatcher.ExpressionReader
             {
                 if (args.Count == 0)
                     throw new Exception("isExtraDataOfAny expects at least one argument");
-                var definition = args[0].GetFunc()(r);
-                string? category = args.Count > 1 ? args[1].GetFunc()(r)?.ToString() : null;
-                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].GetFunc()(r)) : null;
+                var definition = args[0].Evaluate(r);
+                string? category = args.Count > 1 ? args[1].Evaluate(r)?.ToString() : null;
+                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].Evaluate(r)) : null;
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
                     return group.Item2.Any(rec => rec.isExtraDataOfThis(r, category,variables));
                 throw new Exception($"Definition '{definition}' malformed");
@@ -512,9 +406,9 @@ namespace KenshiPatcher.ExpressionReader
             {
                 if (args.Count == 0)
                     throw new Exception("hasAnyAsExtraData expects at least one argument");
-                var definition = args[0].GetFunc()(r);
-                string? category = args.Count > 1 ? args[1].GetFunc()(r)?.ToString() : null;
-                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].GetFunc()(r)) : null;
+                var definition = args[0].Evaluate(r);
+                string? category = args.Count > 1 ? args[1].Evaluate(r)?.ToString() : null;
+                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].Evaluate(r)) : null;
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
                     return group.Item2.Any(rec => rec.hasThisAsExtraData(r, category, variables));
                 throw new Exception($"Definition '{definition}' malformed");
@@ -523,22 +417,22 @@ namespace KenshiPatcher.ExpressionReader
             {
                 if (args.Count == 0)
                     throw new Exception("allExtraDataIsWithin expects at least one argument");
-                var definition = args[0].GetFunc()(r);
-                string? category = args.Count > 1 ? args[1].GetFunc()(r)?.ToString() : null;
-                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].GetFunc()(r)) : null;
+                var definition = args[0].Evaluate(r);
+                string? category = args.Count > 1 ? args[1].Evaluate(r)?.ToString():null;
+                int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].Evaluate(r)) : null;
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
                     return group.Item2.All(rec => rec.hasThisAsExtraData(r, category, variables));
                 throw new Exception($"Definition '{definition}' malformed");
             }}
             };
-        private readonly List<IExpression<object>> arguments;
+        private readonly List<Expression<object>> arguments;
         public static T[] ConvertArray<T>(object? value)
         {
             if (value is not Array arr)
                 throw new Exception($"Expected array, got {value?.GetType().Name ?? "null"}");
             return arr.Cast<object>().Select(o => (T)Convert.ChangeType(o, typeof(T))).ToArray();
         }
-        public BoolFunctionExpression(string funcName, List<IExpression<object>> args)
+        public BoolFunctionExpression(string funcName, List<Expression<object>> args)
         {
             arguments = args;
             if (!functions.TryGetValue(funcName, out var f))
@@ -547,66 +441,56 @@ namespace KenshiPatcher.ExpressionReader
             func = r => f(r, arguments);
         }
 
-        public Func<ModRecord?, bool> GetFunc() => func!;
+        public override bool EvaluateTyped(ModRecord? r) => func(r!);
     }
-    public class IndexExpression : IExpression<object>
+    public class IndexExpression : Expression<object>
     {
-        private readonly IExpression<object> target;
-        private readonly IExpression<object> index;
+        private readonly Expression<object> target;
+        private readonly Expression<object> index;
 
-        public IndexExpression(IExpression<object> target, IExpression<object> index)
+        public IndexExpression(Expression<object> target, Expression<object> index)
         {
             this.target = target;
             this.index = index;
         }
-        public class TableNameExpression : IExpression<object>
+        public class TableNameExpression : Expression<object>
         {
             public string Name { get; }
             public TableNameExpression(string name) => Name = name;
 
-            public Func<ModRecord?, object> GetFunc()
-            {
-                return _ => Name; // just returns the table name
-            }
-
+            public override string EvaluateTyped(ModRecord? r) => Name;
             public override string ToString() => $"Table<{Name}>";
         }
-        public Func<ModRecord?, object> GetFunc()
+
+        public override object EvaluateTyped(ModRecord? r)
         {
-            var targetFunc = target.GetFunc();
-            var indexFunc = index.GetFunc();
+            var targetVal = target.Evaluate(r);
+            var indexVal = index.Evaluate(r);
 
-            return record =>
+            if (targetVal is IList<object> list)
             {
-                var targetVal = targetFunc(record);
-                var indexVal = indexFunc(record);
+                int idx = Convert.ToInt32(indexVal);
+                if (idx < 0 || idx >= list.Count)
+                    throw new Exception($"Array index {idx} out of range");
+                return list[idx];
+            }
 
-                if (targetVal is IList<object> list)
-                {
-                    int idx = Convert.ToInt32(indexVal);
-                    if (idx < 0 || idx >= list.Count)
-                        throw new Exception($"Array index {idx} out of range");
-                    return list[idx];
-                }
+            var targetStr = targetVal!.ToString();
+            var indexStr = indexVal!.ToString();
 
-                // existing table-handling logic below...
-                var targetStr = targetVal?.ToString();
-                var indexStr = indexVal?.ToString();
+            if (targetStr == null || indexStr == null)
+                throw new Exception("IndexExpression: null table name or key");
 
-                if (targetStr == null || indexStr == null)
-                    throw new Exception("IndexExpression: null table name or key");
+            if (!Patcher.Instance.tables.TryGetValue(targetStr, out var table))
+                throw new Exception($"Table '{targetStr}' not found");
 
-                if (!Patcher.Instance.tables.TryGetValue(targetStr, out var table))
-                    throw new Exception($"Table '{targetStr}' not found");
+            if (!table.TryGetValue(indexStr, out var value))
+                throw new Exception($"Key '{indexStr}' not found in table '{targetStr}'");
 
-                if (!table.TryGetValue(indexStr, out var value))
-                    throw new Exception($"Key '{indexStr}' not found in table '{targetStr}'");
+            if (value is Expression<object> expr)
+                return expr.Evaluate(r)!;
 
-                if (value is IExpression<object> expr)
-                    return expr.GetFunc()(record);
-
-                return value;
-            };
+            return value;
         }
 
         public override string ToString()
@@ -614,7 +498,8 @@ namespace KenshiPatcher.ExpressionReader
             return $"IndexExpression({target}[{index}])";
         }
     }
-    public class RecordGroupExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public class RecordGroupExpression : Expression<object>
     {
         private (List<string>, List<ModRecord>) group;
 
@@ -623,10 +508,7 @@ namespace KenshiPatcher.ExpressionReader
             this.group = group;
         }
 
-        public Func<ModRecord?, object> GetFunc()
-        {
-            return _ => group;
-        }
+        public override object EvaluateTyped(ModRecord? r) => group!;
         public override string ToString()
         {
             StringBuilder sb = new();
@@ -638,47 +520,15 @@ namespace KenshiPatcher.ExpressionReader
             return sb.ToString();
         }
     }
-    public class PipeExpression : IExpression<object>
-    {
-        private readonly RecordGroupExpression left;    // left is explicitly a RecordGroupExpression
-        private readonly ProcedureExpression right;     // right is explicitly a ProcedureExpression
-
-        public PipeExpression(RecordGroupExpression left, ProcedureExpression right)
-        {
-            this.left = left ?? throw new ArgumentNullException(nameof(left));
-            this.right = right ?? throw new ArgumentNullException(nameof(right));
-        }
-
-        public Func<ModRecord?, object> GetFunc()
-        {
-            var leftFunc = left.GetFunc();
-
-            return record =>
-            {
-                var leftValue = leftFunc(record);
-
-                if (leftValue is not (List<string> names, List<ModRecord> records))
-                    throw new Exception("PipeExpression: left side must evaluate to a record group (List<string>, List<ModRecord>)");
-
-                right.SetTarget((names, records));
-                var procFunc = right.GetFunc();
-                procFunc(record);
-                return leftValue;
-            };
-        }
-        public override string ToString()
-        {
-            return $"PipeExpression({left} -> {right})";
-        }
-    }
-    public class ProcedureExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public class ProcedureExpression : Expression<object>
     {
         private readonly string procedureName;
-        private readonly List<IExpression<object>> arguments;
+        private readonly List<Expression<object>> arguments;
         private readonly Func<(List<string>, List<ModRecord>), object> func;
         private (List<string>, List<ModRecord>)? target;
 
-        public static readonly Dictionary<string, Func<(List<string>, List<ModRecord>), List<IExpression<object>>, object?>> procedures =
+        public static readonly Dictionary<string, Func<(List<string>, List<ModRecord>), List<Expression<object>>, object?>> procedures =
             new()
             {
             { "SetField", (targetGroup, args) =>
@@ -687,9 +537,7 @@ namespace KenshiPatcher.ExpressionReader
                     foreach (var record in targetGroup.Item2)
                     {
                         string strfieldname=ExpressionUtils.ExpectString(args[0],record);
-                        //if(!(args[0].GetFunc()(record) is string strfieldname))
-                        //    throw new FormatException($"Invalid field name: ({args[0].ToString()})");
-                        string value=args[1].GetFunc()(record).ToString()!;
+                        string value=args[1].Evaluate(record)!.ToString()!;
                         Patcher.Instance.currentRE!.SetField(record,strfieldname,value);
                     }
                     return null;
@@ -700,13 +548,8 @@ namespace KenshiPatcher.ExpressionReader
                     foreach (var record in targetGroup.Item2)
                     {
                         string strfieldname=ExpressionUtils.ExpectString(args[0],record);
-                        //if(!(args[0].GetFunc()(record) is string strfieldname))
-                        //    throw new FormatException($"Invalid field name: ({args[0].ToString()})");
-                        //string value=ExpressionUtils.ExpectString(args[1],record);
-                        string value=args[1].GetFunc()(record).ToString()!;
+                        string value=args[1].Evaluate(record)!.ToString()!;
                         string strtype=ExpressionUtils.ExpectString(args[2],record);
-                        //if(!(args[2].GetFunc()(null) is string strtype))
-                        //    throw new FormatException($"Invalid field name: ({args[2].ToString()})");
                         Patcher.Instance.currentRE!.ForceSetField(record,strfieldname,value,strtype);
                     }
                     return null;
@@ -720,16 +563,20 @@ namespace KenshiPatcher.ExpressionReader
 
                     string category = ExpressionUtils.ExpectString(args[1]);
                     Func<ModRecord?, object>? func_array=null;
-                    if (args.Count>2)
-                        func_array=args[2].GetFunc();
                     foreach (var record in targetGroup.Item2)
                     {
                         int[]? arrayvar = null;
-                        if (func_array != null)
+                        if (args.Count>2)
                         {
-                            var result = func_array(record);
+                            var result = args[2].Evaluate(record);
                             if (result is int[] arr)
                                 arrayvar = arr;
+                            else if (result is object[] objArr)
+                            {
+                                arrayvar = objArr
+                                    .Select(o => (int)Convert.ChangeType(o!, typeof(int)))
+                                    .ToArray();
+                            }
                             else
                                 throw new FormatException($"Invalid array returned for category: {result}");
                         }
@@ -753,14 +600,7 @@ namespace KenshiPatcher.ExpressionReader
                             var vf = ExpressionUtils.ExpectLambda(args[2]);
                             if (vf is not Func<object?[], object?> lambdaFactory)
                                 throw new FormatException($"Array element is not a lambda: {vf}");
-                            // ExpectLambda should return Func<object?[], object?>, same as transformers
-                            //var lambda = vf;
-                            /*isValid = arr =>
-                            {
-                                var result = lambda(new object?[] { arr });
-                                if (result is bool b) return b;
-                                throw new FormatException($"EditExtraData: validation lambda did not return bool.");
-                            };*/
+
                             isValid = arr =>
                             {
                                 object[] boxed = arr.Select(x => (object)x).ToArray();
@@ -802,7 +642,7 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
             };
-        public ProcedureExpression(string name, List<IExpression<object>> args)
+        public ProcedureExpression(string name, List<Expression<object>> args)
         {
             procedureName = name;
             arguments = args;
@@ -820,54 +660,71 @@ namespace KenshiPatcher.ExpressionReader
         {
             target = targetGroup;
         }
+        public override object EvaluateTyped(ModRecord? r) => func(target!.Value);
 
-        public Func<ModRecord?, object> GetFunc()
+    }
+    [DebuggerDisplay("{ToString()}")]
+    public class PipeExpression : Expression<object>
+    {
+        private readonly RecordGroupExpression left;
+        private readonly ProcedureExpression right; 
+
+        public PipeExpression(RecordGroupExpression left, ProcedureExpression right)
         {
-            if (target == null)
-                throw new Exception("ProcedureExpression has no target");
-
-            return _ => func(target.Value);
+            this.left = left ?? throw new ArgumentNullException(nameof(left));
+            this.right = right ?? throw new ArgumentNullException(nameof(right));
+        }
+        public override object EvaluateTyped(ModRecord? r)
+        {
+            var leftValue = left.Evaluate(r);
+            if (leftValue is not (List<string> names, List<ModRecord> records))
+                throw new Exception("PipeExpression: left side must evaluate to a record group (List<string>, List<ModRecord>)");
+            right.SetTarget((names, records));
+            right.Evaluate(r);
+            return leftValue;
+        }
+        public override string ToString()
+        {
+            return $"PipeExpression({left} -> {right})";
         }
     }
-    public class LambdaExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+
+    public sealed class LambdaExpression : Expression<object>
     {
         public List<string> Parameters { get; }
-        public IExpression<object> Body { get; }
+        public Expression<object> Body { get; }
 
-        public LambdaExpression(List<string> parameters, IExpression<object> body)
+        public LambdaExpression(List<string> parameters, Expression<object> body)
         {
             Parameters = parameters;
             Body = body;
         }
-
-        public Func<ModRecord?, object> GetFunc()
+        public override object EvaluateTyped(ModRecord? r)
         {
-            return _ =>
+            return new Func<object?[], object?>(args =>
             {
-                return new Func<object?[], object?>(args =>
-                {
-                    if (args.Length != Parameters.Count)
-                        throw new Exception($"Lambda: expected {Parameters.Count} args, got {Parameters.Count}");
-                    var local = new Dictionary<string, object?>();
+                if (args.Length != Parameters.Count)
+                    throw new Exception($"Lambda: expected {Parameters.Count} args, got {Parameters.Count}");
+                var local = new Dictionary<string, object?>();
 
-                    for (int i = 0; i < Parameters.Count; i++)
-                        local[Parameters[i]] = args[i];
+                for (int i = 0; i < Parameters.Count; i++)
+                    local[Parameters[i]] = args[i];
 
-                    var result = EvaluateWithLocalScope(Body, local);
+                var result = EvaluateWithLocalScope(Body, local);
 
-                    if (result is long l)
-                        return (int)l;
+                if (result is long l)
+                    return (int)l;
 
-                    if (result is double d && Math.Abs(d % 1) < double.Epsilon)
-                        return (int)d;
+                if (result is double d && Math.Abs(d % 1) < double.Epsilon)
+                    return (int)d;
 
-                    return result;
-                });
-            };
+                return result;
+            });
         }
-        private object? EvaluateWithLocalScope(IExpression<object> expr, Dictionary<string, object?> locals)
+
+        private object? EvaluateWithLocalScope(Expression<object> expr, Dictionary<string, object?> locals)
         {
-            // Variable -> lookup locals
             if (expr is VariableExpression v)
             {
                 if (locals.TryGetValue(v.Name, out var val))
@@ -875,7 +732,6 @@ namespace KenshiPatcher.ExpressionReader
                 throw new Exception($"Unknown variable '{v.Name}'");
             }
 
-            // Binary -> evaluate children recursively and apply operator
             if (expr is BinaryExpression b)
             {
                 var leftVal = EvaluateWithLocalScope(b.left, locals);
@@ -883,11 +739,9 @@ namespace KenshiPatcher.ExpressionReader
 
                 if (!BinaryExpression.Operators.TryGetValue(b.op, out var binOp))
                     throw new Exception($"Unknown binary operator '{b.op}'");
-
                 return binOp(leftVal!, rightVal!);
             }
 
-            // Unary -> evaluate inner and apply operator
             if (expr is UnaryExpression u)
             {
                 var innerVal = EvaluateWithLocalScope(u.inner, locals);
@@ -900,8 +754,6 @@ namespace KenshiPatcher.ExpressionReader
             if (expr is ArrayExpression arrayExpr)
             {
                 var values = new List<object?>();
-                //foreach (var element in arrayExpr.elements)
-                //    values.Add(EvaluateWithLocalScope(element, locals));
                 foreach (var element in arrayExpr.elements)
                 {
                     if (element is LambdaExpression)
@@ -913,7 +765,7 @@ namespace KenshiPatcher.ExpressionReader
             }
             if (expr is FunctionExpression<object> fexpr)
             {
-                var evaluatedArgs = new List<IExpression<object>>();
+                var evaluatedArgs = new List<Expression<object>>();
 
                 foreach (var arg in fexpr.arguments)
                 {
@@ -925,11 +777,10 @@ namespace KenshiPatcher.ExpressionReader
             }
             try
             {
-                return expr.GetFunc()(null);
+                return expr.Evaluate(null);
             }
             catch (Exception ex)
             {
-                // Improve diagnostics if something goes wrong during fallback evaluation
                 throw new Exception($"Error evaluating expression of type {expr.GetType().Name} inside lambda: {ex.Message}", ex);
             }
         }
@@ -939,12 +790,13 @@ namespace KenshiPatcher.ExpressionReader
             return $"Lambda({string.Join(", ", Parameters)} => {Body})";
         }
     }
-    public class GlobalFunctionExpression : IExpression<object>
+    [DebuggerDisplay("{ToString()}")]
+    public class GlobalFunctionExpression : Expression<object>
     {
         private readonly string name;
-        private readonly List<IExpression<object>> args;
+        private readonly List<Expression<object>> args;
 
-        public static readonly Dictionary<string, Action<List<IExpression<object>>>> globalFuncs = new()
+        public static readonly Dictionary<string, Action<List<Expression<object>>>> globalFuncs = new()
         {
             { "Print", args =>
                 {
@@ -979,7 +831,7 @@ namespace KenshiPatcher.ExpressionReader
                 }
             }
         };
-        private static string getStringFromArgs(List<IExpression<object>> args)
+        private static string getStringFromArgs(List<Expression<object>> args)
         {
             StringBuilder sb = new StringBuilder();
             foreach (var arg in args) {
@@ -988,22 +840,18 @@ namespace KenshiPatcher.ExpressionReader
             return sb.ToString();
         }
 
-        public GlobalFunctionExpression(string name, List<IExpression<object>> args)
+        public GlobalFunctionExpression(string name, List<Expression<object>> args)
         {
             this.name = name;
             this.args = args;
         }
 
-        public Func<ModRecord?, object> GetFunc()
+        public override object EvaluateTyped(ModRecord? r)
         {
             if (!globalFuncs.TryGetValue(name, out var func))
                 throw new Exception($"Unknown global function '{name}'");
-
-            return _ =>
-            {
-                func(args);
-                return true;
-            };
+            func(args);
+            return true;
         }
 
         public override string ToString() => $"@{name}({string.Join(", ", args)})";

@@ -51,10 +51,10 @@ class Parser
         else
             throw new Exception($"Expected {type}, got {current.Type}");
     }*/
-    private IExpression<object> ParseGlobalFunctionCall(string funcName)
+    private Expression<object> ParseGlobalFunctionCall(string funcName)
     {
         Eat(TokenType.LParen);
-        var args = new List<IExpression<object>>();
+        var args = new List<Expression<object>>();
 
         if (current.Type != TokenType.RParen)
         {
@@ -69,9 +69,9 @@ class Parser
         Eat(TokenType.RParen);
         return new GlobalFunctionExpression(funcName, args);
     }
-    public IExpression<object>ParseExpression(int minPrecedence = 0)
+    public Expression<object>ParseExpression(int minPrecedence = 0)
     {
-        IExpression<object> left;
+        Expression<object> left;
         if (current.Type == TokenType.AtSign)
         {
             Eat(TokenType.AtSign);
@@ -125,33 +125,33 @@ class Parser
         return left;
     }
 
-    private IExpression<object> ParsePrimary()
+    private Expression<object> ParsePrimary()
     {
-        IExpression<object> expr;
+        Expression<object> expr;
         switch (current.Type)
         {
             case TokenType.IntLiteral:
                 int intVal = int.Parse(current.OriginalText!, System.Globalization.CultureInfo.InvariantCulture);
                 Eat(TokenType.IntLiteral);
-                expr= new ObjectExpression<int>(new Literal<int>(intVal));
+                expr= new ObjectExpression<int>(new Literal<int>(intVal))!;
                 break;
 
             case TokenType.DoubleLiteral:
                 double doubleVal = double.Parse(current.OriginalText!, System.Globalization.CultureInfo.InvariantCulture);
                 Eat(TokenType.DoubleLiteral);
-                expr = new ObjectExpression<double>(new Literal<double>(doubleVal));
+                expr = new ObjectExpression<double>(new Literal<double>(doubleVal))!;
                 break;
 
             case TokenType.StringLiteral:
                 string str = current.OriginalText!;
                 Eat(TokenType.StringLiteral);
-                expr = new ObjectExpression<string>(new Literal<string>(str)); 
+                expr = new ObjectExpression<string>(new Literal<string>(str))!; 
                 break;
 
             case TokenType.BoolLiteral:
                 bool boolVal = bool.Parse(current.OriginalText!);
                 Eat(TokenType.BoolLiteral);
-                expr = new ObjectExpression<bool>(new Literal<bool>(boolVal));
+                expr = new ObjectExpression<bool>(new Literal<bool>(boolVal))!;
                 break;
             case TokenType.Identifier:
                 {
@@ -185,7 +185,7 @@ class Parser
                 {
                     Eat(TokenType.LBracket);
 
-                    var elements = new List<IExpression<object>>();
+                    var elements = new List<Expression<object>>();
 
                     if (current.Type != TokenType.RBracket)
                     {
@@ -209,7 +209,7 @@ class Parser
         }
         return ParsePostfix(expr);
     }
-    private IExpression<object> ParseLambda()
+    private Expression<object> ParseLambda()
     {
         // Parameter name
         string paramName = current.OriginalText!;
@@ -242,11 +242,11 @@ class Parser
 
        // return new LambdaExpression(new List<string> { paramName }, body);
     }
-    private IExpression<object> ParseFunctionCall(string funcName)
+    private Expression<object> ParseFunctionCall(string funcName)
     {
         Eat(TokenType.LParen);
 
-        var args = new List<IExpression<object>>();
+        var args = new List<Expression<object>>();
 
         if (current.Type != TokenType.RParen)
         {
@@ -262,12 +262,12 @@ class Parser
         Eat(TokenType.RParen);
 
         if (BoolFunctionExpression.functions.ContainsKey(funcName))
-            return new ObjectExpression<bool>(new BoolFunctionExpression(funcName, args));
+            return new ObjectExpression<bool>(new BoolFunctionExpression(funcName, args))!;
         if (ProcedureExpression.procedures.ContainsKey(funcName))
             return new ProcedureExpression(funcName, args);
         return new FunctionExpression<object>(funcName, args);
     }
-    private IExpression<object> ParsePostfix(IExpression<object> expr)
+    private Expression<object> ParsePostfix(Expression<object> expr)
     {
         while (true)
         {
@@ -295,6 +295,6 @@ class Parser
         if (current.Type != TokenType.End)
             throw new Exception($"Unexpected tokens after expression: {current.Type}");
 
-        return expr.GetFunc();
+        return expr.Evaluate!;//GetFunc()!;
     }
 }
