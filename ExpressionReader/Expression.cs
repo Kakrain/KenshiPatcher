@@ -214,6 +214,7 @@ namespace KenshiPatcher.ExpressionReader
         public readonly List<Expression<object>> arguments;
         private readonly string functionname;
         private readonly Func<ModRecord, T> func;
+        private static readonly Random getrandom = new Random();
 
         public static readonly Dictionary<string, Func<ModRecord, List<Expression<object>>, T>> functions =
             new()
@@ -288,7 +289,6 @@ namespace KenshiPatcher.ExpressionReader
                     {
                         var arrObj = args[0].Evaluate(r);
                         var indexObj = args[1].Evaluate(r);
-
                         int index = Convert.ToInt32(indexObj);
 
                         switch (arrObj)
@@ -310,6 +310,32 @@ namespace KenshiPatcher.ExpressionReader
                             default:
                                 throw new Exception("ArrIndex: unsupported array type: " + arrObj?.GetType());
                         }
+                    }
+                },
+                { "RandomFloat", (r, args) =>
+                    {
+                        return (T)Convert.ChangeType(getrandom.NextDouble(), typeof(T))!;
+                    }
+                },
+                { "RandomBetweenInts", (r, args) =>
+                    {
+                        int min = (int)Convert.ToInt64(args[0].Evaluate(r));
+                        int max = (int)Convert.ToInt64(args[1].Evaluate(r));
+                        return (T)Convert.ChangeType(getrandom.Next(min,max), typeof(T))!;
+                    }
+                },
+                { "ContainsCS", (r, args) =>
+                    {
+                        string s0=ExpressionUtils.ExpectString(args[0],r);
+                        string s1=ExpressionUtils.ExpectString(args[1],r);
+                        return (T)Convert.ChangeType(s0.Contains(s1), typeof(T))!;
+                    }
+                },
+                { "ContainsCI", (r, args) =>
+                    {
+                        string s0=ExpressionUtils.ExpectString(args[0],r);
+                        string s1=ExpressionUtils.ExpectString(args[1],r);
+                        return (T)Convert.ChangeType(s0.ToLower().Contains(s1.ToLower()), typeof(T))!;
                     }
                 }
                 };
@@ -423,7 +449,13 @@ namespace KenshiPatcher.ExpressionReader
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
                     return group.Item2.All(rec => rec.hasThisAsExtraData(r, category, variables));
                 throw new Exception($"Definition '{definition}' malformed");
-            }}
+            }},
+            { "isRemoved", (r, args) =>
+                {
+                    string field = "REMOVED";
+                    return !string.IsNullOrEmpty(field) && r.HasField(field) && r.BoolFields[field];
+                }
+            }
             };
         private readonly List<Expression<object>> arguments;
         public static T[] ConvertArray<T>(object? value)
@@ -557,12 +589,8 @@ namespace KenshiPatcher.ExpressionReader
             },
             { "AddExtraData", (targetGroup, args) =>
                 {
-
-
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
-
                     string category = ExpressionUtils.ExpectString(args[1]);
-                    Func<ModRecord?, object>? func_array=null;
                     foreach (var record in targetGroup.Item2)
                     {
                         int[]? arrayvar = null;
@@ -573,16 +601,42 @@ namespace KenshiPatcher.ExpressionReader
                                 arrayvar = arr;
                             else if (result is object[] objArr)
                             {
-                                arrayvar = objArr
-                                    .Select(o => (int)Convert.ChangeType(o!, typeof(int)))
-                                    .ToArray();
+                                arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
                             }
                             else
                                 throw new FormatException($"Invalid array returned for category: {result}");
                         }
                         foreach (var source in sources)
                         {
-                            Patcher.Instance.currentRE!.AddExtraData(record,source,category,func_array==null?null:arrayvar);
+                            Patcher.Instance.currentRE!.AddExtraData(record,source,category,arrayvar==null?null:arrayvar);
+                        }
+                    }
+                    Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
+                    return null;
+                }
+            },
+            { "ForceAddExtraData", (targetGroup, args) =>
+                {
+                    (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
+                    string category = ExpressionUtils.ExpectString(args[1]);
+                    foreach (var record in targetGroup.Item2)
+                    {
+                        int[]? arrayvar = null;
+                        if (args.Count>2)
+                        {
+                            var result = args[2].Evaluate(record);
+                            if (result is int[] arr)
+                                arrayvar = arr;
+                            else if (result is object[] objArr)
+                            {
+                                arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
+                            }
+                            else
+                                throw new FormatException($"Invalid array returned for category: {result}");
+                        }
+                        foreach (var source in sources)
+                        {
+                            Patcher.Instance.currentRE!.AddExtraData(record,source,category,arrayvar==null?null:arrayvar,true);
                         }
                     }
                     Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());

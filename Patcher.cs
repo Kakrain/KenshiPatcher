@@ -331,7 +331,6 @@ namespace KenshiPatcher
             CoreUtils.Print($"Executing procedure: {text}");
             var parser = new Parser(text);
             var expr = parser.ParseExpression();
-           // expr.GetFunc()(null);
             expr.Evaluate(null);
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
@@ -370,7 +369,8 @@ namespace KenshiPatcher
         }
         private (string mode, string recordType, string condition) ParseRecordDefinition(string def)
         {
-            var match = Regex.Match(def, @"^([AE]):([A-Z_]+)\|(.+)$");
+            //var match = Regex.Match(def, @"^([AE]):([A-Z_]+)\|(.+)$");
+            var match = Regex.Match(def, @"^([AE]|\d+):([A-Z_]+)\|(.+)$");
             if (!match.Success)
                 throw new FormatException($"Invalid record definition: ({def})");
 
@@ -417,7 +417,7 @@ namespace KenshiPatcher
                     yield return (record, modName);
             }
         }
-        private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
+        /*private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
     List<string> modNames, List<ModRecord> records, Func<ModRecord, bool> predicate, string mode)
         {
             var finalNames = new List<string>();
@@ -430,6 +430,36 @@ namespace KenshiPatcher
                     finalRecords.Add(records[i]);
                     finalNames.Add(modNames[i]);
                     if (mode == "E")
+                        break;
+                }
+            }
+
+            return (finalNames, finalRecords);
+        }*/
+
+        private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
+    List<string> modNames,
+    List<ModRecord> records,
+    Func<ModRecord, bool> predicate,
+    string mode)
+        {
+            var finalNames = new List<string>();
+            var finalRecords = new List<ModRecord>();
+
+            // Determine numeric limit if mode is a number
+            int limit = mode == "A" ? int.MaxValue :
+                        mode == "E" ? 1 :
+                        int.TryParse(mode, out var n) ? n :
+                        int.MaxValue;
+
+            for (int i = 0; i < records.Count; i++)
+            {
+                if (predicate(records[i]))
+                {
+                    finalRecords.Add(records[i]);
+                    finalNames.Add(modNames[i]);
+
+                    if (finalRecords.Count >= limit)
                         break;
                 }
             }

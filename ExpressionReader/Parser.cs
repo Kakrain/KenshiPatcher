@@ -42,15 +42,6 @@ class Parser
 
         Advance();
     }
-
-    /*
-    private void Eat(TokenType type)
-    {
-        if (current.Type == type)
-            current = lexer.Next();
-        else
-            throw new Exception($"Expected {type}, got {current.Type}");
-    }*/
     private Expression<object> ParseGlobalFunctionCall(string funcName)
     {
         Eat(TokenType.LParen);
@@ -233,14 +224,6 @@ class Parser
             if (added) localParameters.Remove(paramName);
         }
 
-
-
-
-
-        // Parse body (full expression)
-        //var body = ParseExpression();
-
-       // return new LambdaExpression(new List<string> { paramName }, body);
     }
     private Expression<object> ParseFunctionCall(string funcName)
     {
