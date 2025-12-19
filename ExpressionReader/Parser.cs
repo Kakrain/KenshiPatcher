@@ -13,7 +13,7 @@ class Parser
 
     private readonly Dictionary<string, int> _precedence = new()
     {
-        { "->", 0 },
+        { "->", 0 },{ "~>", 0 },
         { "||", 1 },
         { "&&", 2 },
         { "==", 3 },{ "!=", 3 },
@@ -101,10 +101,18 @@ class Parser
             Eat(TokenType.Operator);
             var right = ParseExpression(opPrecedence + 1);
             //left = new BinaryExpression(left, right, op!);
-            if (op == "->")
+            if (op == "->"||op=="~>")
             {
-                // Special case: pipe operator
-                left = new PipeExpression(left as RecordGroupExpression ?? throw new Exception("Left side of '->' must be a Definition"), right as ProcedureExpression?? throw new Exception("Right side of '->' must be a Procedure"));
+                if (!(right is ProcedureExpression procExpr))
+                    throw new Exception($"Right side of '{op}' must be a ProcedureExpression");
+
+                if (op == "~>")
+                    procExpr.setOneToOne(true); // make sure ProcedureExpression exposes a setter or method
+
+                if (left is not RecordGroupExpression recordGroup)
+                    throw new Exception($"Left side of '{op}' must be a RecordGroupExpression");
+
+                left = new PipeExpression(recordGroup, procExpr);
             }
             else
             {
@@ -246,7 +254,7 @@ class Parser
 
         if (BoolFunctionExpression.functions.ContainsKey(funcName))
             return new ObjectExpression<bool>(new BoolFunctionExpression(funcName, args))!;
-        if (ProcedureExpression.procedures.ContainsKey(funcName))
+        if (ProcedureExpression.containsFunc(funcName))//ProcedureExpression.procedures.ContainsKey(funcName))
             return new ProcedureExpression(funcName, args);
         return new FunctionExpression<object>(funcName, args);
     }

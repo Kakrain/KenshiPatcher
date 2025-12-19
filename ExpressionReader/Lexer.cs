@@ -30,7 +30,7 @@ namespace KenshiPatcher.ExpressionReader
             if (char.IsDigit(c)) return ReadNumber();
             if (char.IsLetter(c)) return ReadIdentifierOrBool();
             if (c == '"') return ReadString();
-            if ("+-*/&|=!><".Contains(c)) return ReadOperator();
+            if ("+-~*/&|=!><".Contains(c)) return ReadOperator();
             if (c == '(') { pos++; return new Token { Type = TokenType.LParen, OriginalText = "(" }; }
             if (c == ')') { pos++; return new Token { Type = TokenType.RParen, OriginalText = ")" }; }
             if (c == ',') { pos++; return new Token { Type = TokenType.Comma, OriginalText = "," }; }
@@ -83,7 +83,7 @@ namespace KenshiPatcher.ExpressionReader
             if (pos + 1 < text.Length)
             {
                 string two = text.Substring(pos, 2);
-                if (two == "==" || two == "!=" || two == ">=" || two == "<=" || two == "&&" || two == "||" || two == "->" || two == "=>")
+                if (two == "==" || two == "!=" || two == ">=" || two == "<=" || two == "&&" || two == "||" || two == "->" || two == "~>" || two == "=>")
                 {
                     pos += 2;
                     return new Token { Type = TokenType.Operator, OriginalText = two };

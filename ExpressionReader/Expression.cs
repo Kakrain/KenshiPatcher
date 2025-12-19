@@ -28,14 +28,26 @@ namespace KenshiPatcher.ExpressionReader
             object arrObj = expression.Evaluate(r)!;
             if (arrObj is Array arr)
                 return arr;  
-            throw new FormatException("EditExtraData: second argument must be an array");
+            throw new FormatException("ExpectArray: second argument must be an array");
         }
         public static Func<object?[], object?> ExpectLambda(Expression<object> expression, ModRecord? r = null)
         {
             object arrObj = expression.Evaluate(r)!;
             if (arrObj is Func<object?[], object?> lambdaArray)
                 return lambdaArray;
-            throw new FormatException("EditExtraData: second argument must be a lambda");
+            throw new FormatException("ExpectArray: second argument must be a lambda");
+        }
+        public static int ExpectInt(Expression<object> expression, ModRecord? r = null)
+        {
+            object o = expression.Evaluate(r)!;
+            try
+            {
+                return (int)ValueCaster.ToInt64(o);
+            }
+            catch (Exception ex)
+            {
+                throw new FormatException($"Expression is expected to be an int: {expression} (value='{o}', type='{o?.GetType().Name ?? "null"}')",ex);
+            }
         }
     }
     [DebuggerDisplay("{ToString()}")]
@@ -91,7 +103,19 @@ namespace KenshiPatcher.ExpressionReader
         public readonly string op;
         public static readonly Dictionary<string, Func<object, object, object>> Operators = new()
         {
-            { "+", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) + ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) + ValueCaster.ToInt64(r) },
+            { "+", (l, r) =>
+            {
+                // string concatenation
+                if (l is string || r is string)
+                    return $"{l}{r}";
+
+                // numeric addition
+                if (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r))
+                    return ValueCaster.ToDouble(l) + ValueCaster.ToDouble(r);
+
+                return ValueCaster.ToInt64(l) + ValueCaster.ToInt64(r);
+            }},
+            //{ "+", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) + ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) + ValueCaster.ToInt64(r) },
             { "-", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) - ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) - ValueCaster.ToInt64(r) },
             { "*", (l, r) => (ValueCaster.IsFloatingLike(l) || ValueCaster.IsFloatingLike(r)) ? ValueCaster.ToDouble(l) * ValueCaster.ToDouble(r) : ValueCaster.ToInt64(l) * ValueCaster.ToInt64(r) },
             { "/", (l, r) =>
@@ -224,10 +248,7 @@ namespace KenshiPatcher.ExpressionReader
                         if (args.Count != 1)
                             throw new Exception("GetField() expects exactly one argument");
                         var fieldName = args[0].Evaluate(r)!.ToString();
-                        if (fieldName == null)
-                            throw new Exception("GetField(): argument evaluated to null");
-
-                        return (T)Convert.ChangeType(r.GetFieldAsObject(fieldName), typeof(T))!;
+                        return (T)Convert.ChangeType(r.GetFieldAsObject(fieldName!), typeof(T))!;
                     }
                 },
                 { "ToInt", (r, args) =>
@@ -337,11 +358,30 @@ namespace KenshiPatcher.ExpressionReader
                         string s1=ExpressionUtils.ExpectString(args[1],r);
                         return (T)Convert.ChangeType(s0.ToLower().Contains(s1.ToLower()), typeof(T))!;
                     }
+                },
+                { "Count", (r, args) =>
+                    {
+                        (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
+                        return (T)Convert.ChangeType(sources.Count(), typeof(T))!;
+                    }
+                },
+                { "Clone", (r, args) =>
+                    {
+                        (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
+                        if(sources.Count != 1){
+                            throw new Exception($"Only one record is supposed to be cloned at a time, currently it is cloning {sources.Count}");
+                        }
+                        int n =ExpressionUtils.ExpectInt(args[1]);
+                        List<string> clonedModNames=Enumerable.Repeat(Patcher.Instance.currentRE!.modname,n).ToList();
+                        List<ModRecord> clonedRecords=Patcher.Instance.currentRE!.CloneRecord(sources.ElementAt(0),n);
+                        //return (T)(object)(clonedModNames, clonedRecords);
+                        return (T)(object)(new RecordGroupExpression((clonedModNames, clonedRecords)));
+                    }
                 }
                 };
-        public object? InvokeWithEvaluatedArgs(List<Expression<object>> args)
+        public object? InvokeWithEvaluatedArgs(List<Expression<object>> args,ModRecord r)
         {
-            return FunctionExpression<object>.functions[functionname](null!, args);
+            return FunctionExpression<object>.functions[functionname](r!, args);
         }
         public FunctionExpression(string funcName, List<Expression<object>> args)
         {
@@ -559,154 +599,188 @@ namespace KenshiPatcher.ExpressionReader
         private readonly List<Expression<object>> arguments;
         private readonly Func<(List<string>, List<ModRecord>), object> func;
         private (List<string>, List<ModRecord>)? target;
+        private bool oneToOne = false;
+        public void setOneToOne(bool v)
+        {
+            oneToOne = v;
+        }
+        public static bool containsFunc(string s)
+        {
+            return procedures_duogroup.ContainsKey(s) || procedures_onegroup.ContainsKey(s);
+        }
+        public static readonly Dictionary<string, Func<ModRecord, List<Expression<object>>, object?>> procedures_onegroup = new()
+            {
+            { "SetField", (record, args) => 
+                {
+                    string strfieldname=ExpressionUtils.ExpectString(args[0],record);
+                    string value=args[1].Evaluate(record)!.ToString()!;
+                    Patcher.Instance.currentRE!.SetField(record,strfieldname,value);
+                    return null;
+                }
+            },
+            { "ForceSetField", (record, args) =>
+                {
+                    string strfieldname=ExpressionUtils.ExpectString(args[0],record);
+                    string value=args[1].Evaluate(record)!.ToString()!;
+                    string strtype=ExpressionUtils.ExpectString(args[2],record);
+                    Patcher.Instance.currentRE!.ForceSetField(record,strfieldname,value,strtype);
+                    return null;
+                }
+            },
+            { "DeleteRecords", (record, args) =>
+                {
+                    Patcher.Instance.currentRE!.deleteRecord(record);
+                    return null;
+                }
+            },
+            { "EditExtraData", (record, args) =>
+                {
+                    string category = ExpressionUtils.ExpectString(args[0]);
+                    Array lambdaArray= ExpressionUtils.ExpectArray(args[1]);
+                    Func<int[], bool>? isValid = null;
+                    if (args.Count > 2)
+                    {
+                        var vf = ExpressionUtils.ExpectLambda(args[2]);
+                        if (vf is not Func<object?[], object?> lambdaFactory)
+                            throw new FormatException($"Array element is not a lambda: {vf}");
 
-        public static readonly Dictionary<string, Func<(List<string>, List<ModRecord>), List<Expression<object>>, object?>> procedures =
+                        isValid = arr =>
+                        {
+                            object[] boxed = arr.Select(x => (object)x).ToArray();
+
+                            var result = lambdaFactory(new object?[] { boxed });
+
+                            if (result is bool b) return b;
+                            throw new FormatException("Validator lambda did not return bool");
+                        };
+                    }
+                    List<Func<int,int>> transformers = new();
+                    foreach (var element in lambdaArray)
+                    {
+                        if (element is not Func<object?[], object?> lambdaFactory)
+                            throw new FormatException($"Array element is not a lambda: {element}");
+
+                        Func<int,int> transformer = x =>
+                        {
+                            var result = lambdaFactory(new object?[] { x });
+                            if (result is int i) return i;
+                            if (result is long l) return (int)l;
+                            if (result is double d && Math.Abs(d % 1) < double.Epsilon)
+                                return (int)d;
+                            throw new FormatException($"Lambda did not return int: {result}");
+                        };
+
+                        transformers.Add(transformer);
+                    }
+                    Patcher.Instance.currentRE!.EditExtraData(record,category,transformers.ToArray(),isValid);
+                    return null;
+                    }
+                }
+            };
+    public static readonly Dictionary<string, Func<ModRecord,ModRecord,List<Expression<object>>, object?>> procedures_duogroup =
             new()
             {
-            { "SetField", (targetGroup, args) =>
+            { "AddExtraData", (record,source, args) =>
                 {
-
-                    foreach (var record in targetGroup.Item2)
-                    {
-                        string strfieldname=ExpressionUtils.ExpectString(args[0],record);
-                        string value=args[1].Evaluate(record)!.ToString()!;
-                        Patcher.Instance.currentRE!.SetField(record,strfieldname,value);
-                    }
-                    return null;
-                }
-            },
-            { "ForceSetField", (targetGroup, args) =>
-                {
-                    foreach (var record in targetGroup.Item2)
-                    {
-                        string strfieldname=ExpressionUtils.ExpectString(args[0],record);
-                        string value=args[1].Evaluate(record)!.ToString()!;
-                        string strtype=ExpressionUtils.ExpectString(args[2],record);
-                        Patcher.Instance.currentRE!.ForceSetField(record,strfieldname,value,strtype);
-                    }
-                    return null;
-                }
-            },
-            { "AddExtraData", (targetGroup, args) =>
-                {
-                    (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     string category = ExpressionUtils.ExpectString(args[1]);
-                    foreach (var record in targetGroup.Item2)
+                    int[]? arrayvar = null;
+                    if (args.Count>2)
                     {
-                        int[]? arrayvar = null;
-                        if (args.Count>2)
+                        var result = args[2].Evaluate(record);
+                        if (result is int[] arr)
+                            arrayvar = arr;
+                        else if (result is object[] objArr)
                         {
-                            var result = args[2].Evaluate(record);
-                            if (result is int[] arr)
-                                arrayvar = arr;
-                            else if (result is object[] objArr)
-                            {
-                                arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
-                            }
-                            else
-                                throw new FormatException($"Invalid array returned for category: {result}");
+                            arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
                         }
-                        foreach (var source in sources)
-                        {
-                            Patcher.Instance.currentRE!.AddExtraData(record,source,category,arrayvar==null?null:arrayvar);
-                        }
+                        else
+                            throw new FormatException($"Invalid array returned for category: {result}");
                     }
-                    Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
+                    Patcher.Instance.currentRE!.AddExtraData(record,source,category,arrayvar==null?null:arrayvar);
                     return null;
                 }
             },
-            { "ForceAddExtraData", (targetGroup, args) =>
+            { "ForceAddExtraData", (record,source, args) =>
                 {
-                    (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     string category = ExpressionUtils.ExpectString(args[1]);
-                    foreach (var record in targetGroup.Item2)
+                    int[]? arrayvar = null;
+                    if (args.Count>2)
                     {
-                        int[]? arrayvar = null;
-                        if (args.Count>2)
+                        var result = args[2].Evaluate(record);
+                        if (result is int[] arr)
+                            arrayvar = arr;
+                        else if (result is object[] objArr)
                         {
-                            var result = args[2].Evaluate(record);
-                            if (result is int[] arr)
-                                arrayvar = arr;
-                            else if (result is object[] objArr)
-                            {
-                                arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
-                            }
-                            else
-                                throw new FormatException($"Invalid array returned for category: {result}");
+                            arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
                         }
-                        foreach (var source in sources)
-                        {
-                            Patcher.Instance.currentRE!.AddExtraData(record,source,category,arrayvar==null?null:arrayvar,true);
-                        }
+                        else
+                            throw new FormatException($"Invalid array returned for category: {result}");
                     }
-                    Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
+                    Patcher.Instance.currentRE!.AddExtraData(record,source,category,arrayvar==null?null:arrayvar,true);
                     return null;
                 }
             },
-            { "EditExtraData", (targetGroup, args) =>
-                    {
-                        string category = ExpressionUtils.ExpectString(args[0]);
-                        Array lambdaArray= ExpressionUtils.ExpectArray(args[1]);
+            { "SetFieldFromOther", (target, source, args) =>
+            {
+                string fieldName = ExpressionUtils.ExpectString(args[1], target);
+                object? sourceValue = target.GetFieldAsObject(fieldName);
 
-                        Func<int[], bool>? isValid = null;
-                        if (args.Count > 2)
-                        {
-                            var vf = ExpressionUtils.ExpectLambda(args[2]);
-                            if (vf is not Func<object?[], object?> lambdaFactory)
-                                throw new FormatException($"Array element is not a lambda: {vf}");
+                var lambdaExpr = args[2] as LambdaExpression
+                    ?? throw new Exception("Third argument must be a lambda");
+                var lambda = (Func<object?[], object?>)lambdaExpr.Evaluate(source)!;
+                object? value = lambda(new object?[] { sourceValue });
 
-                            isValid = arr =>
-                            {
-                                object[] boxed = arr.Select(x => (object)x).ToArray();
-
-                                var result = lambdaFactory(new object?[] { boxed });
-
-                                if (result is bool b) return b;
-                                throw new FormatException("Validator lambda did not return bool");
-                            };
-                        }
-                        List<Func<int,int>> transformers = new();
-                        foreach (var element in lambdaArray)
-                        {
-                            if (element is not Func<object?[], object?> lambdaFactory)
-                                throw new FormatException($"Array element is not a lambda: {element}");
-
-                            Func<int,int> transformer = x =>
-                            {
-                                var result = lambdaFactory(new object?[] { x });
-                                if (result is int i) return i;
-                                if (result is long l) return (int)l;
-                                if (result is double d && Math.Abs(d % 1) < double.Epsilon)
-                                    return (int)d;
-                                throw new FormatException($"Lambda did not return int: {result}");
-                            };
-
-                            transformers.Add(transformer);
-                        }
-                        foreach (var record in targetGroup.Item2)
-                        {
-                            Patcher.Instance.currentRE!.EditExtraData(
-                                record,
-                                category,
-                                transformers.ToArray(),
-                                isValid
-                            );
-                        }
-                        return null;
-                    }
-                }
+                Patcher.Instance.currentRE!.SetField(target, fieldName, value?.ToString() ?? "");
+                return null;
+            }}
             };
         public ProcedureExpression(string name, List<Expression<object>> args)
         {
             procedureName = name;
             arguments = args;
-            if (!procedures.TryGetValue(name, out var f))
+
+            procedures_onegroup.TryGetValue(name, out var oneFunc);
+            procedures_duogroup.TryGetValue(name, out var duoFunc);
+
+            if (oneFunc == null && duoFunc == null)
                 throw new Exception($"Unknown procedure {name}");
+
             func = tg =>
             {
-                var result = f(tg, arguments);
-                Patcher.Instance.currentRE!.addDependencies(tg.Item1.Distinct(StringComparer.Ordinal).ToList());
-                return result!;
+                var currentMod = Patcher.Instance.currentRE!.modname;
+                var (leftNames, leftRecords) = tg;
+
+                if (duoFunc != null)
+                {
+                    (List<string> modnames, List<ModRecord> sources) = ExpressionUtils.ExpectGroupRecord(arguments[0]);
+
+                    if (oneToOne)
+                    {
+                        if (leftRecords.Count != sources.Count)
+                            throw new Exception("One-to-one procedure requires left and right groups to be the same length");
+                        for (int i = 0; i < leftRecords.Count; i++)
+                            duoFunc(leftRecords[i], sources[i], arguments);
+                    }
+                    else
+                    {
+                        foreach (var record in leftRecords)
+                            foreach (var source in sources)
+                                duoFunc(record, source, arguments);
+                    }
+                    Patcher.Instance.currentRE!.addReferences(modnames
+                    .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
+
+                    //Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
+                }
+                else
+                {
+                    foreach (var record in leftRecords)
+                        oneFunc!(record, arguments);
+                }
+                Patcher.Instance.currentRE!.addDependencies(leftNames
+                        .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
+                //Patcher.Instance.currentRE!.addDependencies(leftNames.Distinct(StringComparer.Ordinal).ToList());
+                return tg;
             };
         }
 
@@ -717,6 +791,7 @@ namespace KenshiPatcher.ExpressionReader
         public override object EvaluateTyped(ModRecord? r) => func(target!.Value);
 
     }
+    
     [DebuggerDisplay("{ToString()}")]
     public class PipeExpression : Expression<object>
     {
@@ -743,12 +818,10 @@ namespace KenshiPatcher.ExpressionReader
         }
     }
     [DebuggerDisplay("{ToString()}")]
-
     public sealed class LambdaExpression : Expression<object>
     {
         public List<string> Parameters { get; }
         public Expression<object> Body { get; }
-
         public LambdaExpression(List<string> parameters, Expression<object> body)
         {
             Parameters = parameters;
@@ -764,8 +837,7 @@ namespace KenshiPatcher.ExpressionReader
 
                 for (int i = 0; i < Parameters.Count; i++)
                     local[Parameters[i]] = args[i];
-
-                var result = EvaluateWithLocalScope(Body, local);
+                var result = EvaluateWithLocalScope(Body, local, r!);
 
                 if (result is long l)
                     return (int)l;
@@ -777,7 +849,7 @@ namespace KenshiPatcher.ExpressionReader
             });
         }
 
-        private object? EvaluateWithLocalScope(Expression<object> expr, Dictionary<string, object?> locals)
+        private object? EvaluateWithLocalScope(Expression<object> expr, Dictionary<string, object?> locals,ModRecord record)
         {
             if (expr is VariableExpression v)
             {
@@ -788,8 +860,8 @@ namespace KenshiPatcher.ExpressionReader
 
             if (expr is BinaryExpression b)
             {
-                var leftVal = EvaluateWithLocalScope(b.left, locals);
-                var rightVal = EvaluateWithLocalScope(b.right, locals);
+                var leftVal = EvaluateWithLocalScope(b.left, locals,record);
+                var rightVal = EvaluateWithLocalScope(b.right, locals, record);
 
                 if (!BinaryExpression.Operators.TryGetValue(b.op, out var binOp))
                     throw new Exception($"Unknown binary operator '{b.op}'");
@@ -798,7 +870,7 @@ namespace KenshiPatcher.ExpressionReader
 
             if (expr is UnaryExpression u)
             {
-                var innerVal = EvaluateWithLocalScope(u.inner, locals);
+                var innerVal = EvaluateWithLocalScope(u.inner, locals, record);
 
                 if (!UnaryExpression.UnaryOperators.TryGetValue(u.op, out var unOp))
                     throw new Exception($"Unknown unary operator '{u.op}'");
@@ -813,7 +885,7 @@ namespace KenshiPatcher.ExpressionReader
                     if (element is LambdaExpression)
                         values.Add(element);
                     else
-                        values.Add(EvaluateWithLocalScope(element, locals));
+                        values.Add(EvaluateWithLocalScope(element, locals, record));
                 }
                 return values.ToArray();
             }
@@ -823,15 +895,16 @@ namespace KenshiPatcher.ExpressionReader
 
                 foreach (var arg in fexpr.arguments)
                 {
-                    var value = EvaluateWithLocalScope(arg, locals);
+                    var value = EvaluateWithLocalScope(arg, locals, record);
                     evaluatedArgs.Add(new LiteralExpression(value));
                 }
 
-                return fexpr.InvokeWithEvaluatedArgs(evaluatedArgs);
+                return fexpr.InvokeWithEvaluatedArgs(evaluatedArgs,record);
             }
             try
             {
-                return expr.Evaluate(null);
+                return expr.Evaluate(record);
+                //return expr.Evaluate(null);
             }
             catch (Exception ex)
             {

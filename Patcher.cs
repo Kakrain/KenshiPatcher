@@ -24,6 +24,7 @@ namespace KenshiPatcher
         public Dictionary<string, Dictionary<string, Expression<object>>> tables = new();
         private readonly string _definition = ":=";
         private readonly string _proc = "->";
+        private readonly string _proc2 = "~>";
         private readonly string _comment = ";";
         private readonly string _extraction = "<<<";
         private readonly string _globalfunc = "@";
@@ -169,7 +170,7 @@ namespace KenshiPatcher
                 ParseExtraction(line);
             else if (line.StartsWith(_globalfunc))
                 ParseProcedure(line);
-            else if (line.Contains(_proc))
+            else if (line.Contains(_proc)|| line.Contains(_proc2))
             {
                 //printAllDefinitions();
                 ParseProcedure(line);
@@ -183,6 +184,18 @@ namespace KenshiPatcher
         }
         private void TrySetValue(string left, Expression<object> expr)
         {
+            if (expr is FunctionExpression<object> fe)
+                {
+                    CoreUtils.Print($"[TrySetValue] Executing side-effect function for '{left}'");
+                    var result = expr.Evaluate(null);
+                    if (result is Expression<object> exprResult)
+                        definitions[left] = exprResult;
+                    else
+                        definitions[left] = new Literal<object>(result!);
+                // store the *result*, not the unevaluated expression
+                //definitions[left] = result!;//new Literal<object>(result!);
+                return;
+                }
             // Detect if left side looks like table[index]
             var match = Regex.Match(left, @"^(\w+)\s*\[\s*([^\]]+)\s*\]$");
             if (match.Success)
@@ -230,10 +243,36 @@ namespace KenshiPatcher
             string right = def[1].Trim();
             TrySetValue(left, ParseExpression(right));
         }
+        private static bool LooksLikeFunctionCall(string text)
+        {
+            // Must start with identifier
+            int i = 0;
+            while (i < text.Length && char.IsWhiteSpace(text[i])) i++;
+
+            int start = i;
+            if (i >= text.Length || !char.IsLetter(text[i])) return false;
+
+            i++;
+            while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_'))
+                i++;
+
+            // Must be immediately followed by '('
+            if (i >= text.Length || text[i] != '(') return false;
+
+            // Must be a known function
+            string name = text.Substring(start, i - start);
+            return FunctionExpression<object>.functions.ContainsKey(name);
+        }
         public static Expression<object> ParseExpression(string text)
         {
             text = text.Trim();
-
+            CoreUtils.Print($"Parsing expression: {text}");
+            if (LooksLikeFunctionCall(text))
+            {
+                CoreUtils.Print($"Parsing function call expression: {text}");
+                var parser = new Parser(text);
+                return parser.ParseExpression();
+            }
             // 1. Check for string literal
             if (text.StartsWith("\"") && text.EndsWith("\"") && text.Length >= 2)
             {
