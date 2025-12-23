@@ -16,6 +16,7 @@ namespace KenshiPatcher.Forms
     {
         private Boolean IndexChangeEnabled = true;
         private Dictionary<ModItem, ReverseEngineer> ReverseEngineersCache = new();
+        ReverseEngineerRepository RERepository = ReverseEngineerRepository.Instance;
         private Patcher? KPatcher;
         public MainForm()
         {
@@ -86,7 +87,9 @@ namespace KenshiPatcher.Forms
                 CoreUtils.Print("No mod selected", 1);
                 return; 
             }
-            KPatcher!.runPatch(mod.getModFilePath()!);
+            string patchPath = mod.GetPatchTargetPath();
+            KPatcher!.runPatch(patchPath);
+            //KPatcher!.runPatch(mod.getModFilePath()!);
         }
 
         protected override async void OnShown(EventArgs e)
@@ -115,7 +118,8 @@ namespace KenshiPatcher.Forms
                 if (isModPatched(mod.Value))
                     realmodpath = getUnpatchedPath(mod.Value);
                 re.LoadModFile(realmodpath);
-                ReverseEngineersCache[mod.Value] = re;
+                RERepository.AddOrUpdate(mod.Key, re);
+                //ReverseEngineersCache[mod.Value] = re;
                 i++;
                 ReportProgress(i, $"Engineered mod:{i}");
             }

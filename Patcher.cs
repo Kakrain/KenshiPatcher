@@ -19,7 +19,8 @@ namespace KenshiPatcher
                 return _instance;
             }
         }
-        private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
+        //private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
+        private ReverseEngineerRepository RERepo = ReverseEngineerRepository.Instance;
         public Dictionary<string, Expression<object>> definitions=new();
         public Dictionary<string, Dictionary<string, Expression<object>>> tables = new();
         private readonly string _definition = ":=";
@@ -29,14 +30,14 @@ namespace KenshiPatcher
         private readonly string _extraction = "<<<";
         private readonly string _globalfunc = "@";
         private bool stopping=false;
-        private readonly List<string> basemods = new() { "gamedata.base", "rebirth.mod","Newwworld.mod","Dialogue.mod" };
-        private List<string>? assumedReqs = null;
+        //private readonly List<string> basemods = new() { "gamedata.base", "rebirth.mod","Newwworld.mod","Dialogue.mod" };
+        //private List<string>? assumedReqs = null;
         public ReverseEngineer? currentRE;
         private static readonly Regex GroupPattern = new Regex(@"^\((?<mods>[\w.,*]+)\)\((?<body>[^)]*\|.*)\)$", RegexOptions.Compiled);
         private bool definitions_printed = false;
         public Patcher(Dictionary<ModItem, ReverseEngineer> modCache)
         {
-            _engCache = modCache;
+            //_engCache = modCache;
             definitions= new();
             tables = new();
             _instance = this;
@@ -59,7 +60,7 @@ namespace KenshiPatcher
         {
             definitions[name] = expr;
         }
-        private void loadAssumedReqs()
+        /*private void loadAssumedReqs()
         {
             if (assumedReqs != null)
                 return;
@@ -72,13 +73,12 @@ namespace KenshiPatcher
                         assumedReqs.AddRange(re.GetModsNewRecords());
                 }
             }
-
-            // Deduplicate (case-insensitive)
-            assumedReqs = assumedReqs
+                // Deduplicate (case-insensitive)
+                assumedReqs = assumedReqs
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
             
-        }
+        }*/
         public void Reset()
         {
             definitions.Clear();
@@ -88,7 +88,7 @@ namespace KenshiPatcher
         public void runPatch(string path)
         {
             Reset();
-            loadAssumedReqs();
+            //loadAssumedReqs();
             loadUnPatchedMod(path);
             string dir = Path.GetDirectoryName(path)!;
             string modName = Path.GetFileNameWithoutExtension(path);
@@ -374,7 +374,7 @@ namespace KenshiPatcher
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
         {
-            if (selector.Equals("all", StringComparison.Ordinal))
+            /*if (selector.Equals("all", StringComparison.Ordinal))
                 return _engCache.Values.ToList(); // all mods loaded
             var result = new List<ReverseEngineer>();
             // Use the shared helper to split safely
@@ -388,9 +388,11 @@ namespace KenshiPatcher
                 if (names.Contains(modItem.Name)!= isExclude)
                     result.Add(re);
             }
-            return result;
+            CoreUtils.Print($"Parsed mod selector '{selector}' to {result.Count} mods.");
+            return result;*/
+            return ReverseEngineerRepository.Instance.ParseModSelector(selector);
         }
-        public string GetModRecordEvolution(string StringId)
+        /*public string GetModRecordEvolution(string StringId)
         {
             StringBuilder sb = new StringBuilder();
             foreach (var kvp in _engCache)
@@ -402,7 +404,7 @@ namespace KenshiPatcher
                     sb.AppendLine($"{modname} => {r.ToString()}");
             }
             return sb.ToString();
-        }
+        }*/
         public void Stop() {
             stopping = true;
         }
@@ -430,7 +432,6 @@ namespace KenshiPatcher
             var predicate = BuildRecordPredicate(condition);
             var collected = CollectRecords(mods, recordType);
             var (modNames, mergedRecords) = FilterUniqueRecordsByPreference(collected);
-
             return FilterRecordsByPredicate(modNames, mergedRecords, predicate, mode);
         }
         private string ExtractRequiredParentheses(ref string text, string name)
@@ -456,25 +457,6 @@ namespace KenshiPatcher
                     yield return (record, modName);
             }
         }
-        /*private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
-    List<string> modNames, List<ModRecord> records, Func<ModRecord, bool> predicate, string mode)
-        {
-            var finalNames = new List<string>();
-            var finalRecords = new List<ModRecord>();
-
-            for (int i = 0; i < records.Count; i++)
-            {
-                if (predicate(records[i]))
-                {
-                    finalRecords.Add(records[i]);
-                    finalNames.Add(modNames[i]);
-                    if (mode == "E")
-                        break;
-                }
-            }
-
-            return (finalNames, finalRecords);
-        }*/
 
         private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
     List<string> modNames,

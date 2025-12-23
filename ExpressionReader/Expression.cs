@@ -949,7 +949,9 @@ namespace KenshiPatcher.ExpressionReader
             { "ShowRecordEvolution", args =>
                 {
                     string stringid=ExpressionUtils.ExpectString(args[0]);
-                    CoreUtils.Print(Patcher.Instance.GetModRecordEvolution(stringid),0);
+                    //CoreUtils.Print(Patcher.Instance.GetModRecordEvolution(stringid),0);
+                    //ReverseEngineerRepository.Instance.GetRecordEvolution(stringid);
+                    CoreUtils.Print(ReverseEngineerRepository.Instance.GetRecordEvolution(stringid),0);
                 }
             },
             { "Stop",args=>
