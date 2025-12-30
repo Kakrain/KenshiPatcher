@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text;
 using System.Xml.Linq;
+using static ScintillaNET.Style;
 
 namespace KenshiPatcher.ExpressionReader
 {
@@ -449,6 +450,14 @@ namespace KenshiPatcher.ExpressionReader
                     return !string.IsNullOrEmpty(field) && r.HasField(field);
                 }
             },
+            { "isExtraDataEmpty", (r, args) =>
+                {
+                    string? category=null;
+                    if (args.Count>0)
+                        category=ExpressionUtils.ExpectString(args[0]);
+                    return r.isExtraDataEmpty(category);
+                }
+            },
             { "FieldIsNotEmpty", (r, args) =>
                 {
                     if (args.Count != 1)
@@ -618,6 +627,20 @@ namespace KenshiPatcher.ExpressionReader
                     return null;
                 }
             },
+            { "SetText", (record, args) =>
+                 {
+                    var lambda = ExpressionUtils.ExpectLambda(args[0], record);
+                    Func<string, string> typedLambda = oldText =>
+                    {
+                        object? result = lambda(new object?[] { oldText });
+                        if (result is not string newText)
+                            throw new FormatException("SetText lambda must return a string");
+                        return newText;
+                    };
+                    Patcher.Instance.currentRE!.SetText(record, typedLambda);
+                    return null;
+                }
+            },
             { "ForceSetField", (record, args) =>
                 {
                     string strfieldname=ExpressionUtils.ExpectString(args[0],record);
@@ -779,7 +802,6 @@ namespace KenshiPatcher.ExpressionReader
                 }
                 Patcher.Instance.currentRE!.addDependencies(leftNames
                         .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
-                //Patcher.Instance.currentRE!.addDependencies(leftNames.Distinct(StringComparer.Ordinal).ToList());
                 return tg;
             };
         }
