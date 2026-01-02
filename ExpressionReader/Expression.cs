@@ -1,4 +1,5 @@
 ﻿using KenshiCore;
+using System;
 using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Text;
@@ -38,12 +39,40 @@ namespace KenshiPatcher.ExpressionReader
                 return lambdaArray;
             throw new FormatException("ExpectArray: second argument must be a lambda");
         }
+        public static Func<T, R> ExpectLambda<T, R>(Expression<object> expression, ModRecord? r = null)
+        {
+            var raw = ExpectLambda(expression, r); // Use the universal lambda first
+
+            return (T input) =>
+            {
+                object? result = raw(new object?[] { input });
+
+                if (result is R rValue)
+                    return rValue;
+
+                throw new FormatException(
+                    $"Lambda must return {typeof(R).Name}; actual: '{result?.GetType().Name ?? "null"}'"
+                );
+            };
+        }
         public static int ExpectInt(Expression<object> expression, ModRecord? r = null)
         {
             object o = expression.Evaluate(r)!;
             try
             {
                 return (int)ValueCaster.ToInt64(o);
+            }
+            catch (Exception ex)
+            {
+                throw new FormatException($"Expression is expected to be an int: {expression} (value='{o}', type='{o?.GetType().Name ?? "null"}')",ex);
+            }
+        }
+        public static bool ExpectBool(Expression<object> expression, ModRecord? r = null)
+        {
+            object o = expression.Evaluate(r)!;
+            try
+            {
+                return (bool)o;
             }
             catch (Exception ex)
             {
@@ -436,7 +465,6 @@ namespace KenshiPatcher.ExpressionReader
     public class BoolFunctionExpression : Expression<bool>
     {
         private readonly Func<ModRecord, bool> func;
-
         public static readonly Dictionary<string, Func<ModRecord, List<Expression<object>>, bool>> functions =
             new()
             {
@@ -504,9 +532,170 @@ namespace KenshiPatcher.ExpressionReader
                     string field = "REMOVED";
                     return !string.IsNullOrEmpty(field) && r.HasField(field) && r.BoolFields[field];
                 }
+            },
+            {
+                "isAllChildrenUntil", (r, args) =>
+                    {
+                        var testExpr = args[0];
+                        var stopExpr = args[1];
+
+                        string category = args.Count > 2
+                            ? ExpressionUtils.ExpectString(args[2], r)
+                            : "lines";
+
+                        int maxVisits = args.Count > 3
+                            ? ExpressionUtils.ExpectInt(args[3], r)
+                            : 50000;
+
+                        bool getEarly = args.Count > 4 ? ExpressionUtils.ExpectBool(args[4], r) : true;
+                        return !IsAnyChildUntil(
+                            r,
+                            rec => !Convert.ToBoolean(testExpr.Evaluate(rec)),
+                            rec => Convert.ToBoolean(stopExpr.Evaluate(rec)),
+                            category,
+                            maxVisits,
+                            getEarly
+                        );
+                    }
+            },
+            {
+                "isAnyChildUntil", (r, args) =>
+                {
+                    var testExpr = args[0];
+                    var stopExpr = args[1];
+
+                    string category = args.Count > 2
+                        ? ExpressionUtils.ExpectString(args[2], r)
+                        : "lines";
+
+                    int maxVisits = args.Count > 3
+                        ? ExpressionUtils.ExpectInt(args[3], r)
+                        : 50000;
+
+                    bool getEarly = args.Count > 4 ? ExpressionUtils.ExpectBool(args[4], r) : true;
+                    return IsAnyChildUntil(
+                        r,
+                        rec => Convert.ToBoolean(testExpr.Evaluate(rec)),
+                        rec => Convert.ToBoolean(stopExpr.Evaluate(rec)),
+                        category,
+                        maxVisits,
+                        getEarly
+                    );
+                }
+            },
+            {
+                "isLoop", (r, args) =>
+                    {
+                        string category = args.Count > 0 ? ExpressionUtils.ExpectString(args[0], r) : "lines";
+                        int maxVisits = args.Count > 1 ? ExpressionUtils.ExpectInt(args[1], r) : 50000;
+                        bool getEarly = args.Count > 4 ? ExpressionUtils.ExpectBool(args[2], r) : true;
+
+                        var visitedIds = new HashSet<string>(StringComparer.Ordinal);
+                        int visitCount = 0;
+
+                        bool Detect(ModRecord rec)
+                        {
+                            if (visitCount++ > maxVisits)
+                                return false;
+
+                            if (!visitedIds.Add(rec.StringId))
+                                return true; // loop detected
+
+                            var children = rec.GetExtraData(category);
+                            if (children != null)
+                            {
+                                foreach (var kv in children)
+                                {
+                                    var child = Resolve(kv.Key, getEarly);
+                                    if (child != null && Detect(child))
+                                        return true;
+                                }
+                            }
+
+                            visitedIds.Remove(rec.StringId);
+                            return false;
+                        }
+
+                        return Detect(r);
+                    }
             }
             };
+
+
+        private static ModRecord? Resolve(string id, bool getEarly = false)
+        {
+            var baseRec = ReverseEngineerRepository.Instance
+                .searchModRecordByStringIdGlobally(id, getEarly);
+
+            if (baseRec == null)
+                return null;
+
+            if (!getEarly)
+            {
+                var localPatch = Patcher.Instance.currentRE!
+                    .searchModRecordByStringIdLocally(id);
+
+                if (localPatch != null)
+                {
+                    baseRec.applyChangesFrom(localPatch);
+                }
+            }
+
+            return baseRec;
+        }
         private readonly List<Expression<object>> arguments;
+        private static bool IsAnyChildUntil(
+        ModRecord root,
+        Func<ModRecord, bool> match,
+        Func<ModRecord, bool> stop,
+        string category,
+        int maxVisits = int.MaxValue,
+        bool getEarly = true)
+            {
+                var visitedIds = new HashSet<string>(StringComparer.Ordinal);
+                int visits = 0;
+
+                bool Traverse(ModRecord rec)
+                {
+                    if (++visits > maxVisits)
+                        return false;
+
+                    if (!visitedIds.Add(rec.StringId))
+                        return false;
+
+                    if (stop(rec))
+                        return false; // stop node excluded, do not count, do not descend
+
+                    if (match(rec))
+                        return true;
+
+                    var children = rec.GetExtraData(category);
+                    if (children != null)
+                    {
+                        foreach (var kv in children)
+                        {
+                            var child = Resolve(kv.Key, getEarly);
+                            if (child != null && Traverse(child))
+                                return true;
+                        }
+                    }
+
+                    return false;
+                }
+
+                var kids = root.GetExtraData(category);
+                if (kids != null)
+                {
+                    foreach (var kv in kids)
+                    {
+                        var child = Resolve(kv.Key, getEarly);
+                        if (child != null && Traverse(child))
+                            return true;
+                    }
+                }
+
+                return false;
+            }
         public static T[] ConvertArray<T>(object? value)
         {
             if (value is not Array arr)
@@ -629,15 +818,8 @@ namespace KenshiPatcher.ExpressionReader
             },
             { "SetText", (record, args) =>
                  {
-                    var lambda = ExpressionUtils.ExpectLambda(args[0], record);
-                    Func<string, string> typedLambda = oldText =>
-                    {
-                        object? result = lambda(new object?[] { oldText });
-                        if (result is not string newText)
-                            throw new FormatException("SetText lambda must return a string");
-                        return newText;
-                    };
-                    Patcher.Instance.currentRE!.SetText(record, typedLambda);
+                    var modifier = ExpressionUtils.ExpectLambda<string, string>(args[0], record);
+                    Patcher.Instance.currentRE!.SetText(record, modifier);
                     return null;
                 }
             },
@@ -659,46 +841,26 @@ namespace KenshiPatcher.ExpressionReader
             { "EditExtraData", (record, args) =>
                 {
                     string category = ExpressionUtils.ExpectString(args[0]);
-                    Array lambdaArray= ExpressionUtils.ExpectArray(args[1]);
+                    Array lambdaArray = ExpressionUtils.ExpectArray(args[1]);
+
                     Func<int[], bool>? isValid = null;
                     if (args.Count > 2)
-                    {
-                        var vf = ExpressionUtils.ExpectLambda(args[2]);
-                        if (vf is not Func<object?[], object?> lambdaFactory)
-                            throw new FormatException($"Array element is not a lambda: {vf}");
-
-                        isValid = arr =>
-                        {
-                            object[] boxed = arr.Select(x => (object)x).ToArray();
-
-                            var result = lambdaFactory(new object?[] { boxed });
-
-                            if (result is bool b) return b;
-                            throw new FormatException("Validator lambda did not return bool");
-                        };
-                    }
-                    List<Func<int,int>> transformers = new();
+                        isValid = ExpressionUtils.ExpectLambda<int[], bool>(args[2], record);
+                    List<Func<int, int>> transformers = new();
                     foreach (var element in lambdaArray)
                     {
-                        if (element is not Func<object?[], object?> lambdaFactory)
+                        if (element is not Expression<object> expr)
                             throw new FormatException($"Array element is not a lambda: {element}");
 
-                        Func<int,int> transformer = x =>
-                        {
-                            var result = lambdaFactory(new object?[] { x });
-                            if (result is int i) return i;
-                            if (result is long l) return (int)l;
-                            if (result is double d && Math.Abs(d % 1) < double.Epsilon)
-                                return (int)d;
-                            throw new FormatException($"Lambda did not return int: {result}");
-                        };
+                        var typed = ExpressionUtils.ExpectLambda<int, int>(expr, record);
+                        transformers.Add(typed);
+                    }
 
-                        transformers.Add(transformer);
-                    }
                     Patcher.Instance.currentRE!.EditExtraData(record,category,transformers.ToArray(),isValid);
+
                     return null;
-                    }
                 }
+            }
             };
     public static readonly Dictionary<string, Func<ModRecord,ModRecord,List<Expression<object>>, object?>> procedures_duogroup =
             new()
@@ -792,8 +954,6 @@ namespace KenshiPatcher.ExpressionReader
                     }
                     Patcher.Instance.currentRE!.addReferences(modnames
                     .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
-
-                    //Patcher.Instance.currentRE!.addReferences(modnames.Distinct(StringComparer.Ordinal).ToList());
                 }
                 else
                 {
