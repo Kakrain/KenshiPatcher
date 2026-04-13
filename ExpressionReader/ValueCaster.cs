@@ -13,6 +13,9 @@ namespace KenshiPatcher.ExpressionReader
         // Is this value an integer (or integer-representing string)?
         public static bool IsIntegerLike(object? value)
         {
+            if (value == null)
+                return true;
+
             if (value is sbyte or byte or short or ushort or int or uint or long or ulong)
                 return true;
 
@@ -36,6 +39,9 @@ namespace KenshiPatcher.ExpressionReader
         // Is this value a floating/decimal (or float-like string)?
         public static bool IsFloatingLike(object? value)
         {
+            if (value == null)
+                return true;
+
             if (value is double or float)
                 return true;
 
@@ -50,8 +56,10 @@ namespace KenshiPatcher.ExpressionReader
             return false;
         }
 
-        public static double ToDouble(object value)
+        public static double ToDouble(object? value)
         {
+            if (value == null)
+                return 0;
             switch (value)
             {
                 case double d: return d;
@@ -73,13 +81,14 @@ namespace KenshiPatcher.ExpressionReader
                         break;
                     }
             }
-            throw new InvalidCastException($"Cannot convert '{value ?? "null"}' to double");
+            throw new InvalidCastException($"Cannot convert '{value}' to double");
         }
 
-        public static long ToInt64(object value)
+        public static long ToInt64(object? value)
         {
             if (value == null)
-                throw new Exception("Cannot cast null to int");
+                return 0;
+            //throw new Exception("Cannot cast null to int");
 
             switch (value)
             {

@@ -620,10 +620,13 @@ namespace KenshiPatcher.ExpressionReader
                     }
             }
             };
-
+        private static readonly Dictionary<(string, bool), ModRecord?> _resolveGlobalCache= new();
 
         private static ModRecord? Resolve(string id, bool getEarly = false)
         {
+            var key = (id, getEarly);
+            if (_resolveGlobalCache.TryGetValue(key, out var cached))
+                return cached;
             var baseRec = ReverseEngineerRepository.Instance
                 .searchModRecordByStringIdGlobally(id, getEarly);
 
@@ -640,7 +643,7 @@ namespace KenshiPatcher.ExpressionReader
                     baseRec.applyChangesFrom(localPatch);
                 }
             }
-
+            _resolveGlobalCache[key] = baseRec;
             return baseRec;
         }
         private readonly List<Expression<object>> arguments;
@@ -653,6 +656,7 @@ namespace KenshiPatcher.ExpressionReader
         bool getEarly = true)
             {
                 var visitedIds = new HashSet<string>(StringComparer.Ordinal);
+                var resolveCache = new Dictionary<string, ModRecord?>(StringComparer.Ordinal);
                 int visits = 0;
 
                 bool Traverse(ModRecord rec)
@@ -674,7 +678,7 @@ namespace KenshiPatcher.ExpressionReader
                     {
                         foreach (var kv in children)
                         {
-                            var child = Resolve(kv.Key, getEarly);
+                            var child = Get(kv.Key);
                             if (child != null && Traverse(child))
                                 return true;
                         }
@@ -683,12 +687,21 @@ namespace KenshiPatcher.ExpressionReader
                     return false;
                 }
 
+                ModRecord? Get(string id)
+                {
+                    if (!resolveCache.TryGetValue(id, out var rec))
+                    {
+                        rec = Resolve(id, getEarly);
+                        resolveCache[id] = rec;
+                    }
+                    return rec;
+                }
                 var kids = root.GetExtraData(category);
                 if (kids != null)
                 {
                     foreach (var kv in kids)
                     {
-                        var child = Resolve(kv.Key, getEarly);
+                        var child = Get(kv.Key);
                         if (child != null && Traverse(child))
                             return true;
                     }
@@ -816,6 +829,16 @@ namespace KenshiPatcher.ExpressionReader
                     return null;
                 }
             },
+            { "SetFieldIfExist", (record, args) =>
+                {
+                    string field = ExpressionUtils.ExpectString(args[0], record);
+                    if (!record.HasField(field))
+                        return null;
+                    string value = args[1].Evaluate(record)?.ToString() ?? "";
+                    Patcher.Instance.currentRE!.SetField(record, field, value);
+                    return null;
+                }
+            },
             { "SetText", (record, args) =>
                  {
                     var modifier = ExpressionUtils.ExpectLambda<string, string>(args[0], record);
@@ -849,11 +872,10 @@ namespace KenshiPatcher.ExpressionReader
                     List<Func<int, int>> transformers = new();
                     foreach (var element in lambdaArray)
                     {
-                        if (element is not Expression<object> expr)
+                        if (element is not Func<object?[], object?> raw)
                             throw new FormatException($"Array element is not a lambda: {element}");
 
-                        var typed = ExpressionUtils.ExpectLambda<int, int>(expr, record);
-                        transformers.Add(typed);
+                        transformers.Add(i => Convert.ToInt32(raw(new object?[] { i })));
                     }
 
                     Patcher.Instance.currentRE!.EditExtraData(record,category,transformers.ToArray(),isValid);
@@ -1064,8 +1086,8 @@ namespace KenshiPatcher.ExpressionReader
                 var values = new List<object?>();
                 foreach (var element in arrayExpr.elements)
                 {
-                    if (element is LambdaExpression)
-                        values.Add(element);
+                    if (element is LambdaExpression lambda)
+                        values.Add(lambda.Evaluate(record));
                     else
                         values.Add(EvaluateWithLocalScope(element, locals, record));
                 }

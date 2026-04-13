@@ -8,14 +8,12 @@ using System.Linq;
 using System.Security.Policy;
 using System.Text;
 using System.Threading.Tasks;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace KenshiPatcher.Forms
 {
     public class MainForm : ProtoMainForm
     {
         private Boolean IndexChangeEnabled = true;
-        private Dictionary<ModItem, ReverseEngineer> ReverseEngineersCache = new();
         ReverseEngineerRepository RERepository = ReverseEngineerRepository.Instance;
         private Patcher? KPatcher;
         public MainForm()
@@ -29,17 +27,34 @@ namespace KenshiPatcher.Forms
             AddColumn("Patch Status", mod => getPatchStatus(mod),150);
             AddButton("Patch it!", PatchItClick, mod =>
             {
-                var selectedMod = getSelectedMod();
-                if (selectedMod == null)
+                if (KPatcher == null || mod == null || ReverseEngineerRepository.Instance.busy)
                     return false;
-                string modpath = selectedMod.getModFilePath()!;
+                string modpath = mod.getModFilePath()!;
                 string dir = Path.GetDirectoryName(modpath)!;
                 string modName = Path.GetFileNameWithoutExtension(modpath);
-                string patchPath = Path.Combine(dir, modName + ".patch");
-                return File.Exists(patchPath);
+                try
+                {
+                    string patchPath = Path.Combine(dir, modName + ".patch");
+                    return File.Exists(patchPath);
+                }
+                catch (System.ArgumentNullException)
+                {
+                    return false;
+                }
+                
             });
-
             modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
+        }
+
+        protected override void LoadMods()
+        {
+            var repo = ModRepository.Instance;
+
+            repo.LoadBaseGameMods(Path.Combine(ModManager.kenshiPath!, "data"));
+            repo.LoadGameDirMods(ModManager.gamedirModsPath!);
+            repo.LoadWorkshopMods(ModManager.workshopModsPath!);
+            repo.LoadSelectedMods(Path.Combine(ModManager.kenshiPath!, "data", "mods.cfg"));
+            repo.excludeUnselectedMods = true;
         }
         protected override void OnLoad(EventArgs e)
         {
@@ -87,9 +102,8 @@ namespace KenshiPatcher.Forms
                 CoreUtils.Print("No mod selected", 1);
                 return; 
             }
-            string patchPath = mod.GetPatchTargetPath();
+            string patchPath = mod.GetPatchTargetPath();//TODO: KPatcher war null?
             KPatcher!.runPatch(patchPath);
-            //KPatcher!.runPatch(mod.getModFilePath()!);
         }
 
         protected override async void OnShown(EventArgs e)
@@ -97,50 +111,41 @@ namespace KenshiPatcher.Forms
             base.OnShown(e);
             await OnShownAsync(e);
         }
+        private string? GetRealModPath(ModItem mod)
+        {
+            if (string.IsNullOrEmpty(mod.getModFilePath()))
+                return null;
+
+            if (isModPatched(mod))
+                return getUnpatchedPath(mod);
+
+            return mod.getModFilePath();
+        }
+        //TODO: save configuration file
+        //TODO: patch status dont update after patching
+        //TODO: maybe show progress of a patch?
+        //TODO: replace all  MessaageBox with UiService
+        protected override async Task AfterModsLoadedAsync()
+        {
+            await Task.Run(() =>
+                RERepository.LoadFromMods(
+                    mergedMods,
+                    GetRealModPath
+                )
+            );
+
+            KPatcher = new Patcher();
+        }
         private async Task OnShownAsync(EventArgs e)
         {
-            if (InitializationTask != null)
-                await InitializationTask;
-            ExcludeUnselectedMods();
-            LoadBaseGameData();
-            InitializeProgress(0, mergedMods.Count);
-            int i = 0;
-            List<string> modsToRemove = new();
-            foreach (var mod in mergedMods)
-            {
-                ReverseEngineer re = new ReverseEngineer();
-                string realmodpath= mod.Value.getModFilePath()!;
-                if (string.IsNullOrEmpty(realmodpath))
-                {
-                    modsToRemove.Add(mod.Key);
-                    continue;
-                }
-                if (isModPatched(mod.Value))
-                    realmodpath = getUnpatchedPath(mod.Value);
-                re.LoadModFile(realmodpath);
-                RERepository.AddOrUpdate(mod.Key, re);
-                //ReverseEngineersCache[mod.Value] = re;
-                i++;
-                ReportProgress(i, $"Engineered mod:{i}");
-            }
-            foreach (var key in modsToRemove)
-                mergedMods.Remove(key);
-
-            modsListView.BeginUpdate();
-            try
-            {
-                foreach (ListViewItem item in modsListView.Items.Cast<ListViewItem>().ToList())
-                {
-                    if (item.Tag is ModItem mod && modsToRemove.Contains(mod.Name))
-                        modsListView.Items.Remove(item);
-                }
-            }
-            finally
-            {
-                modsListView.EndUpdate();
-            }
-
-            KPatcher = new Patcher(ReverseEngineersCache);
+            await Task.Yield();
+            await Task.Run(() =>
+                RERepository.LoadFromMods(
+                    mergedMods,
+                    GetRealModPath
+                )
+            );
+            KPatcher = new Patcher();
 
         }
         private void ShowModInfo(ModItem mod)

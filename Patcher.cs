@@ -2,6 +2,7 @@
 using KenshiPatcher.ExpressionReader;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 
 namespace KenshiPatcher
 {
@@ -30,14 +31,11 @@ namespace KenshiPatcher
         private readonly string _extraction = "<<<";
         private readonly string _globalfunc = "@";
         private bool stopping=false;
-        //private readonly List<string> basemods = new() { "gamedata.base", "rebirth.mod","Newwworld.mod","Dialogue.mod" };
-        //private List<string>? assumedReqs = null;
         public ReverseEngineer? currentRE;
         private static readonly Regex GroupPattern = new Regex(@"^\((?<mods>[\w.,*]+)\)\((?<body>[^)]*\|.*)\)$", RegexOptions.Compiled);
         private bool definitions_printed = false;
-        public Patcher(Dictionary<ModItem, ReverseEngineer> modCache)
+        public Patcher()
         {
-            //_engCache = modCache;
             definitions= new();
             tables = new();
             _instance = this;
@@ -60,25 +58,6 @@ namespace KenshiPatcher
         {
             definitions[name] = expr;
         }
-        /*private void loadAssumedReqs()
-        {
-            if (assumedReqs != null)
-                return;
-            assumedReqs = new List<string>();
-            foreach (var mod in _engCache.Keys)
-            {
-                if (basemods.Any(b => string.Equals(b, mod.Name, StringComparison.Ordinal)))
-                {
-                    if (_engCache.TryGetValue(mod, out var re))
-                        assumedReqs.AddRange(re.GetModsNewRecords());
-                }
-            }
-                // Deduplicate (case-insensitive)
-                assumedReqs = assumedReqs
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
-            
-        }*/
         public void Reset()
         {
             definitions.Clear();
@@ -88,7 +67,6 @@ namespace KenshiPatcher
         public void runPatch(string path)
         {
             Reset();
-            //loadAssumedReqs();
             loadUnPatchedMod(path);
             string dir = Path.GetDirectoryName(path)!;
             string modName = Path.GetFileNameWithoutExtension(path);
@@ -97,6 +75,7 @@ namespace KenshiPatcher
             CoreUtils.StartLog(modName, dir);
             try
             {
+                var sw = Stopwatch.StartNew();
                 ProcessPatchLines(lines);
                 if (stopping)
                 {
@@ -105,7 +84,8 @@ namespace KenshiPatcher
                     return;
                 }
                 savePatchedMod(path);
-                MessageBox.Show($"{modName} patched!");
+                sw.Stop();
+                UiService.ShowMessage($"{modName} patched in {sw.Elapsed:mm\\:ss\\.fff}");
             }
             catch (Exception ex)
             {
@@ -280,11 +260,9 @@ namespace KenshiPatcher
             }
 
             // 2. Numeric literal
-            if (double.TryParse(text, System.Globalization.NumberStyles.Float,
-                                System.Globalization.CultureInfo.InvariantCulture, out var dval))
+            if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var dval))
                 return new Literal<object>(dval);
-            if (long.TryParse(text, System.Globalization.NumberStyles.Integer,
-                                System.Globalization.CultureInfo.InvariantCulture, out var lval))
+            if (long.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var lval))
                 return new Literal<object>(lval);
 
             // 3. Table index: table[index]
@@ -362,6 +340,7 @@ namespace KenshiPatcher
             // Update source definition
             definitions[oldDefinitionSource] = new RecordGroupExpression((modNames, modRecords));
 
+            CoreUtils.Print($"Extracted {extractedRecords.Count} of {modRecords.Count + extractedRecords.Count} records from '{oldDefinitionSource}' into new group.");
             // Return the new group
             return new RecordGroupExpression((extractedNames, extractedRecords));
         }
