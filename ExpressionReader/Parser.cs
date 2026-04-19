@@ -1,4 +1,5 @@
-﻿using KenshiCore;
+﻿using KenshiCore.Mods;
+using KenshiCore.Utilities;
 using KenshiPatcher;
 using KenshiPatcher.ExpressionReader;
 using static KenshiPatcher.ExpressionReader.IndexExpression;

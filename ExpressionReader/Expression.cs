@@ -1,4 +1,6 @@
-﻿using KenshiCore;
+﻿using KenshiCore.Mods;
+using KenshiCore.ReverseEngineering;
+using KenshiCore.Utilities;
 using System;
 using System.Diagnostics;
 using System.Linq.Expressions;

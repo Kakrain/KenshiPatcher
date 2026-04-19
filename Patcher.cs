@@ -1,8 +1,11 @@
-﻿using KenshiCore;
-using KenshiPatcher.ExpressionReader;
+﻿using KenshiPatcher.ExpressionReader;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
+using KenshiCore.UI;
+using KenshiCore.Mods;
+using KenshiCore.ReverseEngineering;
+using KenshiCore.Utilities;
 
 namespace KenshiPatcher
 {
@@ -20,7 +23,6 @@ namespace KenshiPatcher
                 return _instance;
             }
         }
-        //private readonly Dictionary<ModItem, ReverseEngineer> _engCache;
         private ReverseEngineerRepository RERepo = ReverseEngineerRepository.Instance;
         public Dictionary<string, Expression<object>> definitions=new();
         public Dictionary<string, Dictionary<string, Expression<object>>> tables = new();
@@ -33,7 +35,7 @@ namespace KenshiPatcher
         private bool stopping=false;
         public ReverseEngineer? currentRE;
         private static readonly Regex GroupPattern = new Regex(@"^\((?<mods>[\w.,*]+)\)\((?<body>[^)]*\|.*)\)$", RegexOptions.Compiled);
-        private bool definitions_printed = false;
+        //private bool definitions_printed = false;
         public Patcher()
         {
             definitions= new();
@@ -54,15 +56,15 @@ namespace KenshiPatcher
             expr = null!;
             return false;
         }
-        public void Define(string name, Expression<object> expr)
-        {
-            definitions[name] = expr;
-        }
         public void Reset()
         {
             definitions.Clear();
             tables.Clear();
             currentRE = null;
+        }
+        public async Task RunPatchAsync(string path)
+        {
+            await Task.Run(() => runPatch(path));
         }
         public void runPatch(string path)
         {
@@ -75,7 +77,6 @@ namespace KenshiPatcher
             CoreUtils.StartLog(modName, dir);
             try
             {
-                var sw = Stopwatch.StartNew();
                 ProcessPatchLines(lines);
                 if (stopping)
                 {
@@ -84,8 +85,6 @@ namespace KenshiPatcher
                     return;
                 }
                 savePatchedMod(path);
-                sw.Stop();
-                UiService.ShowMessage($"{modName} patched in {sw.Elapsed:mm\\:ss\\.fff}");
             }
             catch (Exception ex)
             {
@@ -94,27 +93,6 @@ namespace KenshiPatcher
             finally
             {
                 CoreUtils.EndLog("Patch execution summary saved.");
-            }
-        }
-        private void printAllDefinitions()
-        {
-            if (definitions_printed)
-                return;
-            definitions_printed = true;
-            foreach (var def in definitions)
-            {
-                var expr = def.Value;
-                //var func = expr.GetFunc();
-                var result = expr.Evaluate(null);//func(null); // or some context ModRecord
-
-                if (result is ValueTuple<List<string>, List<ModRecord>> group)
-                {
-                    CoreUtils.Print($"Definition: {def.Key} has this many records: {group.Item2.Count}");
-                }
-                else
-                {
-                    CoreUtils.Print($"Definition: {def.Key} = {result}");
-                }
             }
         }
         private void ProcessPatchLines(IEnumerable<string> lines)
@@ -320,8 +298,11 @@ namespace KenshiPatcher
             var extractedRecords = new List<ModRecord>();
             var indexesToRemove = new List<int>();
 
+            var progress = ProgressController.Instance;
+            progress.Initialize(modRecords.Count);
             for (int i = 0; i < modRecords.Count; i++)
             {
+                progress.Report(i, $"Extracting {i}/{modRecords.Count}");
                 if (predicate(modRecords[i]))
                 {
                     extractedRecords.Add(modRecords[i]);
@@ -329,6 +310,7 @@ namespace KenshiPatcher
                     indexesToRemove.Add(i);
                 }
             }
+            progress.Finish();
 
             // Remove from source (reverse order)
             for (int i = indexesToRemove.Count - 1; i >= 0; i--)
@@ -353,37 +335,8 @@ namespace KenshiPatcher
         }
         private List<ReverseEngineer> ParseModSelector(string selector)
         {
-            /*if (selector.Equals("all", StringComparison.Ordinal))
-                return _engCache.Values.ToList(); // all mods loaded
-            var result = new List<ReverseEngineer>();
-            // Use the shared helper to split safely
-            bool isExclude = selector.StartsWith("*", StringComparison.Ordinal);
-            selector = isExclude ? selector.Substring(1) : selector;
-            var names = CoreUtils.SplitModList(selector).ToHashSet(StringComparer.Ordinal);
-            foreach (var kvp in _engCache)
-            {
-                var modItem = kvp.Key;
-                var re = kvp.Value;
-                if (names.Contains(modItem.Name)!= isExclude)
-                    result.Add(re);
-            }
-            CoreUtils.Print($"Parsed mod selector '{selector}' to {result.Count} mods.");
-            return result;*/
             return ReverseEngineerRepository.Instance.ParseModSelector(selector);
         }
-        /*public string GetModRecordEvolution(string StringId)
-        {
-            StringBuilder sb = new StringBuilder();
-            foreach (var kvp in _engCache)
-            {
-                string modname = kvp.Key.Name;
-                ReverseEngineer re = kvp.Value;
-                ModRecord? r=re.searchModRecordByStringId(StringId);
-                if (r != null)
-                    sb.AppendLine($"{modname} => {r.ToString()}");
-            }
-            return sb.ToString();
-        }*/
         public void Stop() {
             stopping = true;
         }
@@ -438,10 +391,10 @@ namespace KenshiPatcher
         }
 
         private (List<string>, List<ModRecord>) FilterRecordsByPredicate(
-    List<string> modNames,
-    List<ModRecord> records,
-    Func<ModRecord, bool> predicate,
-    string mode)
+            List<string> modNames,
+            List<ModRecord> records,
+            Func<ModRecord, bool> predicate,
+            string mode)
         {
             var finalNames = new List<string>();
             var finalRecords = new List<ModRecord>();
@@ -451,6 +404,9 @@ namespace KenshiPatcher
                         mode == "E" ? 1 :
                         int.TryParse(mode, out var n) ? n :
                         int.MaxValue;
+
+            var progress = ProgressController.Instance;
+            progress.Initialize(records.Count);
 
             for (int i = 0; i < records.Count; i++)
             {
@@ -462,8 +418,9 @@ namespace KenshiPatcher
                     if (finalRecords.Count >= limit)
                         break;
                 }
+                progress.Report(i, $"Filtering records{i}");
             }
-
+            progress.Finish();
             return (finalNames, finalRecords);
         }
         private (List<string> modNames, List<ModRecord> records)
@@ -472,7 +429,13 @@ FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModN
             var resultModNames = new List<string>();
             var resultRecords = new List<ModRecord>();
 
-            foreach (var group in records.GroupBy(x => x.record.StringId))
+            var grouped = records.GroupBy(x => x.record.StringId).ToList();
+
+            ProgressController progress = ProgressController.Instance;
+            progress.Initialize(grouped.Count);
+            int i = 0;
+            foreach (var group in grouped)
+            //foreach (var group in records.GroupBy(x => x.record.StringId))
             {
                 var recList = group.ToList();
 
@@ -498,8 +461,11 @@ FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModN
                 {
                     CoreUtils.Print($"not found new record of:{recList.ToArray()[0].record.StringId}");
                 }
+                i++;
+                progress.Report(i, $"Merging records {i}/{grouped.Count}");
             }
 
+            progress.Finish();
             return (resultModNames, resultRecords);
         }
         private string? ExtractParenthesesContent(ref string text)
