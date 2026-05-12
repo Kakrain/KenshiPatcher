@@ -93,7 +93,16 @@ namespace KenshiPatcher.ExpressionReader
         public abstract T EvaluateTyped(ModRecord? r);
 
         public override object? Evaluate(ModRecord? r)
-            => EvaluateTyped(r);
+        {
+            try
+            {
+                return EvaluateTyped(r);
+            }
+            catch (System.NullReferenceException ex)
+            {
+                throw new MissingRecordException(r,"Null reference while evaluating record.",ex);
+            }
+        }
     }
 
     [DebuggerDisplay("{ToString()}")]
@@ -406,7 +415,6 @@ namespace KenshiPatcher.ExpressionReader
                         int n =ExpressionUtils.ExpectInt(args[1]);
                         List<string> clonedModNames=Enumerable.Repeat(Patcher.Instance.currentRE!.modname,n).ToList();
                         List<ModRecord> clonedRecords=Patcher.Instance.currentRE!.CloneRecord(sources.ElementAt(0),n);
-                        //return (T)(object)(clonedModNames, clonedRecords);
                         return (T)(object)(new RecordGroupExpression((clonedModNames, clonedRecords)));
                     }
                 }
@@ -476,8 +484,9 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     if (args.Count != 1)
                         throw new Exception("FieldExist expects exactly one argument");
-                    string? field = args[0].Evaluate(r)!.ToString();
-                    return !string.IsNullOrEmpty(field) && r.HasField(field);
+                    string field = ExpressionUtils.ExpectString(args[0]);
+                    return r.HasField(field) && !string.IsNullOrEmpty(r.GetFieldAsString(field));
+                    
                 }
             },
             { "isExtraDataEmpty", (r, args) =>
@@ -492,8 +501,8 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     if (args.Count != 1)
                         throw new Exception("FieldIsNotEmpty expects exactly one argument");
-                    string? field = args[0].Evaluate(r)!.ToString();
-                    return !string.IsNullOrEmpty(field) && !string.IsNullOrEmpty(r.GetFieldAsString(field));
+                    string field = ExpressionUtils.ExpectString(args[0]);
+                    return r.HasField(field) && !string.IsNullOrEmpty(r.GetFieldAsString(field));
                 }
             },
             { "isExtraDataOfAny", (r, args) =>
@@ -526,7 +535,14 @@ namespace KenshiPatcher.ExpressionReader
                 string? category = args.Count > 1 ? args[1].Evaluate(r)?.ToString():null;
                 int[]? variables = args.Count > 2 ? ConvertArray<int>(args[2].Evaluate(r)) : null;
                 if (definition is ValueTuple<List<string>, List<ModRecord>> group)
-                    return group.Item2.All(rec => rec.hasThisAsExtraData(r, category, variables));
+                {
+                    Dictionary<string, int[]>? extradata=r.GetExtraData(category);
+                    if (extradata == null || extradata.Count == 0)
+                        return true;
+                    var allowedIds = group.Item2.Select(x => x.StringId).ToHashSet();
+                    return extradata.Keys.All(rec =>allowedIds.Contains(rec));
+                    //return group.Item2.All(rec => rec.hasThisAsExtraData(r, category, variables));
+                }
                 throw new Exception($"Definition '{definition}' malformed");
             }},
             { "isRemoved", (r, args) =>
@@ -961,11 +977,24 @@ namespace KenshiPatcher.ExpressionReader
 
                 if (duoFunc != null)
                 {
-                    (List<string> modnames, List<ModRecord> sources) = ExpressionUtils.ExpectGroupRecord(arguments[0]);
-
+                    List<string> modnames = new();
+                    List<ModRecord> sources = new();
+                    bool obtained_group_record = true;
+                    try
+                    {
+                        (modnames, sources) = ExpressionUtils.ExpectGroupRecord(arguments[0]);
+                    }
+                    catch (MissingRecordException)
+                    {
+                        obtained_group_record = false;
+                    }
                     if (oneToOne)
                     {
-                        if (leftRecords.Count != sources.Count)
+                        if (!obtained_group_record)
+                        {
+                            throw new Exception("One-to-one procedure requires a group record as argument");
+                        }
+                        if (leftRecords.Count != sources!.Count)
                             throw new Exception("One-to-one procedure requires left and right groups to be the same length");
                         for (int i = 0; i < leftRecords.Count; i++)
                             duoFunc(leftRecords[i], sources[i], arguments);
@@ -973,8 +1002,19 @@ namespace KenshiPatcher.ExpressionReader
                     else
                     {
                         foreach (var record in leftRecords)
-                            foreach (var source in sources)
+                        {
+                            if (!obtained_group_record)
+                            {
+                                    var (modn, srcs) =ExpressionUtils.ExpectGroupRecord(arguments[0], record);
+                                    modnames ??= new List<string>();
+                                    modnames.AddRange(modn);
+                                    sources = srcs;
+                            }
+                            foreach (var source in sources!)
+                            {
                                 duoFunc(record, source, arguments);
+                            }
+                        }
                     }
                     Patcher.Instance.currentRE!.addReferences(modnames
                     .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());

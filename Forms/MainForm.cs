@@ -44,10 +44,10 @@ namespace KenshiPatcher.Forms
         {
             var repo = ModRepository.Instance;
 
-            repo.LoadBaseGameMods(Path.Combine(ModManager.kenshiPath!, "data"));
-            repo.LoadGameDirMods(ModManager.gamedirModsPath!);
-            repo.LoadWorkshopMods(ModManager.workshopModsPath!);
-            repo.LoadSelectedMods(Path.Combine(ModManager.kenshiPath!, "data", "mods.cfg"));
+            repo.LoadBaseGameMods();
+            repo.LoadGameDirMods();
+            repo.LoadWorkshopMods();
+            repo.LoadSelectedMods();
             repo.excludeUnselectedMods = true;
         }
         private bool isModPatched(ModItem mod)
