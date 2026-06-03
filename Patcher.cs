@@ -42,31 +42,17 @@ namespace KenshiPatcher
             tables = new();
             _instance = this;
         }
-        public bool TryResolve(string name, out Expression<object>? expr)
-        {
-            if (definitions.TryGetValue(name, out expr))
-                return true;
-
-            if (tables.TryGetValue(name, out var table))
-            {
-                expr = new Literal<object>(table);
-                return true;
-            }
-
-            expr = null!;
-            return false;
-        }
         public void Reset()
         {
             definitions.Clear();
             tables.Clear();
             currentRE = null;
         }
-        public async Task RunPatchAsync(string path)
+        public async Task<bool> RunPatchAsync(string path)
         {
-            await Task.Run(() => runPatch(path));
+            return await Task.Run(() => runPatch(path));
         }
-        public void runPatch(string path)
+        public bool runPatch(string path)
         {
             Reset();
             loadUnPatchedMod(path);
@@ -81,14 +67,16 @@ namespace KenshiPatcher
                 if (stopping)
                 {
                     stopping = false;
-                    CoreUtils.Print("Stopping due to Global Function", 1);
-                    return;
+                    CoreUtils.Prompt("Stopping due to Global Function");
+                    return false;
                 }
                 savePatchedMod(path);
+                return true;
             }
             catch (Exception ex)
             {
                 HandlePatchError(ex);
+                return false;
             }
             finally
             {
@@ -130,7 +118,6 @@ namespace KenshiPatcher
                 ParseProcedure(line);
             else if (line.Contains(_proc)|| line.Contains(_proc2))
             {
-                //printAllDefinitions();
                 ParseProcedure(line);
             }
             else
@@ -138,7 +125,7 @@ namespace KenshiPatcher
         }
         private void HandlePatchError(Exception ex)
         {
-            CoreUtils.Print($"[ERROR] {ex.Message}\n{ex.StackTrace}", 1);
+            CoreUtils.Prompt($"[ERROR] {ex.Message}\n{ex.StackTrace}");
         }
         private void TrySetValue(string left, Expression<object> expr)
         {
@@ -146,12 +133,22 @@ namespace KenshiPatcher
                 {
                     CoreUtils.Print($"[TrySetValue] Executing side-effect function for '{left}'");
                     var result = expr.Evaluate(null);
+                    if (result is Dictionary<string, Expression<object>> table)
+                    {
+                        tables[left] = table;
+                        CoreUtils.Print($"[TrySetValue] Stored generated table '{left}'");
+                        return;
+                    }
                     if (result is Expression<object> exprResult)
+                    {
                         definitions[left] = exprResult;
+                    }
                     else
+                    {
+                        CoreUtils.Print($"converted to Literal : {result!.ToString()}");
                         definitions[left] = new Literal<object>(result!);
-                // store the *result*, not the unevaluated expression
-                //definitions[left] = result!;//new Literal<object>(result!);
+                    }
+                
                 return;
                 }
             // Detect if left side looks like table[index]
@@ -291,7 +288,7 @@ namespace KenshiPatcher
             CoreUtils.Print($"Parsing extraction condition: {condition}");
             var parser = new Parser(condition);
             var cond = parser.ParseValueExpression();
-            Func<ModRecord, bool> predicate = r => (bool)cond(r);
+            Func<ModRecord, bool> predicate = r => (bool)cond(r,null!);
 
             // Perform extraction
             var extractedNames = new List<string>();
@@ -378,7 +375,7 @@ namespace KenshiPatcher
             var parser = new Parser(condition);
             CoreUtils.Print("Parsing condition: " + condition);
             var cond = parser.ParseValueExpression();
-            return r => (bool)cond(r);
+            return r => (bool)cond(r,null!);
         }
         private IEnumerable<(ModRecord record, string modName)> CollectRecords(IEnumerable<ReverseEngineer> mods, string recordType)
         {
@@ -418,7 +415,7 @@ namespace KenshiPatcher
                     if (finalRecords.Count >= limit)
                         break;
                 }
-                progress.Report(i, $"Filtering records{i}");
+                progress.Report(i, $"Filtering records {i}");
             }
             progress.Finish();
             return (finalNames, finalRecords);

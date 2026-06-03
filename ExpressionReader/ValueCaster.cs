@@ -10,6 +10,7 @@ namespace KenshiPatcher.ExpressionReader
 {
     internal static class ValueCaster
     {
+        private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         // Is this value an integer (or integer-representing string)?
         public static bool IsIntegerLike(object? value)
         {
@@ -27,10 +28,7 @@ namespace KenshiPatcher.ExpressionReader
 
             if (value is string s)
             {
-                return long.TryParse(s,
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out _);
+                return long.TryParse(s, NumberStyles.Integer, Inv, out _);
             }
 
             return false;
@@ -47,10 +45,8 @@ namespace KenshiPatcher.ExpressionReader
 
             if (value is string s)
             {
-                return double.TryParse(s,
-                    NumberStyles.Float | NumberStyles.AllowThousands,
-                    CultureInfo.InvariantCulture,
-                    out _);
+                return double.TryParse(s, NumberStyles.Float, Inv, out _);
+                //return double.TryParse(s, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out _);
             }
 
             return false;
@@ -74,21 +70,45 @@ namespace KenshiPatcher.ExpressionReader
                 case sbyte sb: return sb;
                 case string s:
                     {
-                        // tolerate both "." and "," decimal separators by normalizing
-                        var normalized = s.Replace(',', '.');
-                        if (double.TryParse(normalized, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var parsed))
-                            return parsed;
-                        break;
+                        return ParseDouble(s);
                     }
+
             }
             throw new InvalidCastException($"Cannot convert '{value}' to double");
+        }
+        public static string ToInvariantString(object? value)
+        {
+            if (value == null)
+                return "";
+
+            return value switch
+            {
+                float f => f.ToString(CultureInfo.InvariantCulture),
+                double d => d.ToString(CultureInfo.InvariantCulture),
+                decimal m => m.ToString(CultureInfo.InvariantCulture),
+
+                _ => value.ToString()!
+            };
+        }
+        private static double ParseDouble(string s)
+        {
+            s = s.Trim();
+
+            if (string.IsNullOrEmpty(s))
+                throw new InvalidCastException("Empty number");
+            if (s.Contains(','))
+                s = s.Replace(',', '.');
+            if (s.Count(c => c == '.') > 1)
+                throw new InvalidCastException($"Malformed number: '{s}'");
+            if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                return d;
+            throw new InvalidCastException($"Cannot convert '{s}' to double");
         }
 
         public static long ToInt64(object? value)
         {
             if (value == null)
                 return 0;
-            //throw new Exception("Cannot cast null to int");
 
             switch (value)
             {
@@ -99,27 +119,15 @@ namespace KenshiPatcher.ExpressionReader
                     return l;
 
                 case double d:
-                    return (long)Math.Round(d);   // <--- IMPORTANT
-                                                  // NO string parsing
+                    return (long)Math.Round(d);
 
                 case float f:
                     return (long)Math.Round(f);
-
                 case string s:
-                    // Try parsing as integer first (dot-only)
-                    if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l2))
-                        return l2;
-
-                    // Try parse as double -> round
-                    if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var d2))
-                        return (long)Math.Round(d2);
-
-                    // Try locale-aware double parse -> round
-                    if (double.TryParse(s, NumberStyles.Float, CultureInfo.CurrentCulture, out var d3))
-                        return (long)Math.Round(d3);
-
-                    throw new Exception($"Cannot convert '{s}' to integer");
-
+                    {
+                        double d = ParseDouble(s);
+                        return (long)Math.Round(d);
+                    }
                 default:
                     throw new Exception($"Unsupported type '{value.GetType()}' for integer cast");
             }

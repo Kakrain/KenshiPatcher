@@ -166,13 +166,34 @@ class Parser
                     }
                     Eat(TokenType.Identifier);
 
-                    if (current.Type == TokenType.LBracket)
+                    /*if (current.Type == TokenType.LBracket)
                         expr = new TableNameExpression(name);
                     else if (current.Type == TokenType.LParen)
                         expr = ParseFunctionCall(name);
                     else
                         expr = Patcher.Instance.definitions[name];
+                    */
 
+                    if (current.Type == TokenType.LBracket)
+                    {
+                        expr = new TableNameExpression(name);
+                    }
+                    else if (current.Type == TokenType.LParen)
+                    {
+                        expr = ParseFunctionCall(name);
+                    }
+                    else if (Patcher.Instance.definitions.TryGetValue(name, out var def))
+                    {
+                        expr = def;
+                    }
+                    else if(Patcher.Instance.tables.ContainsKey(name))
+                    {//if (Patcher.Instance.definitions.TryGetValue(name, out var deftable))
+                        expr = new TableNameExpression(name);
+                    }
+                    else
+                    {
+                        throw new Exception($"Unknown identifier '{name}'");
+                    }
                     return ParsePostfix(expr); // handle indexing
                 }
             case TokenType.LParen:
@@ -280,7 +301,7 @@ class Parser
         return expr;
     }
     
-    public Func<ModRecord, object> ParseValueExpression()
+    public Func<ModRecord, Dictionary<string, object?>, object> ParseValueExpression()
     {
         var expr = ParseExpression();
         CoreUtils.Print("AST: " + expr.ToString());

@@ -92,17 +92,31 @@ namespace KenshiPatcher.Forms
                 UiService.ShowMessage("No mod available for patching selected", "Error", MessageBoxIcon.Error);
                 return;
             }
+            var failedMods = new List<string>();
             StringBuilder sb = new StringBuilder();
             var sw = Stopwatch.StartNew();
             foreach (var mod in mods)
             {
-                string patchPath = mod.GetPatchTargetPath()!;
-                await KPatcher!.RunPatchAsync(patchPath);
-            }
-            sb.AppendJoin(", ", mods.ConvertAll(m=>m.Name));
-            sw.Stop();
-            UiService.ShowMessage($"{sb.ToString()} patched in {sw.Elapsed:mm\\:ss\\.fff}");
+                bool success = await KPatcher!.RunPatchAsync(mod.GetPatchTargetPath()!);
 
+                if (!success)
+                    failedMods.Add(mod.Name);
+            }
+            if (failedMods.Count == 0)
+            {
+                sw.Stop();
+                sb.AppendJoin(", ", mods.ConvertAll(m => m.Name));
+                UiService.ShowMessage(
+                    $"{sb} patched in {sw.Elapsed:mm\\:ss\\.fff}");
+            }
+            else
+            {
+                sw.Stop();
+                UiService.ShowMessage(
+                    $"Finished with errors.\n Failed: {string.Join(", ", failedMods)} \n Read the .log file for details",
+                    "Patch Errors",
+                    MessageBoxIcon.Warning);
+            }
             RefreshColumn(1);
             modsListView.Refresh();
         }
