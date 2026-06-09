@@ -3,11 +3,13 @@ using KenshiCore.OgreEngineering;
 using KenshiCore.ReverseEngineering;
 using KenshiCore.UI;
 using KenshiCore.Utilities;
+using KenshiPatcher.Forms;
 using System;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Text;
+using System.Threading.Tasks.Sources;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using static ScintillaNET.Style;
@@ -23,6 +25,12 @@ namespace KenshiPatcher.ExpressionReader
             if (o is string s)
                 return s;
             throw new FormatException($"Expression is expected to be a string: {expression.ToString()}");
+        }
+        public static Literal<object> ExpectLiteral(Expression<object> expression)
+        {
+            if (expression is Literal<object> literal)
+                return literal;
+            throw new FormatException($"Expression is expected to be a literal expression: {expression.ToString()}");
         }
         public static (List<string>, List<ModRecord>) ExpectGroupRecord(Expression<object> expression, ModRecord? r = null, Dictionary<string, object?>? locals = null)
         {
@@ -115,15 +123,19 @@ namespace KenshiPatcher.ExpressionReader
     [DebuggerDisplay("{ToString()}")]
     public sealed class Literal<T> : Expression<T>
     {
-        private readonly T value;
+        private T value;//readonly
 
         public Literal(T value) => this.value = value;
+        public void setValue(T newValue)
+        {
+            value = newValue;
+        }
 
         public override T EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null) => value;
 
         public override string ToString()
         {
-            return $"Literal<{value?.ToString() ?? "null"}>";
+            return $"Literal<{value?.GetType()}> :{value?.ToString() ?? "null"}";
         }
 
     }
@@ -288,12 +300,16 @@ namespace KenshiPatcher.ExpressionReader
             this.op = sop;
         }
     }
-    [DebuggerDisplay("{ToString()}")]
+    /*[DebuggerDisplay("{ToString()}")]
     public class LiteralExpression : Expression<object>
     {
-        private readonly object? value;
+        private  object? value; //readonly
 
         public LiteralExpression(object? val)
+        {
+            value = val;
+        }
+        public void setValue(object? val)
         {
             value = val;
         }
@@ -301,7 +317,7 @@ namespace KenshiPatcher.ExpressionReader
 
 
         public override string ToString() => value?.ToString() ?? "null";
-    }
+    }*/
     [DebuggerDisplay("{ToString()}")]
     public class FunctionExpression<T> : Expression<T>
     {
@@ -1328,6 +1344,27 @@ namespace KenshiPatcher.ExpressionReader
             { "Stop",args=>
                 {
                     Patcher.Instance.Stop();
+                }
+            },
+            { "AskConfig",args=>
+                {
+                    Literal<object> literal=ExpressionUtils.ExpectLiteral(args[0]);
+                    string question =ExpressionUtils.ExpectString(args[1]);
+                    
+                    /*if(args.Count>2)
+                    {
+                        object[] options = ExpressionUtils.ExpectArray(args[2]);
+                        literal.options = options;
+                    }*/
+
+                    KPatcherConfigForm configform=KPatcherConfigForm.Instance;
+                    configform.AddOption(literal,question);
+                }
+            },
+            { "ShowConfig",args=>
+                {
+                    KPatcherConfigForm configform=KPatcherConfigForm.Instance;
+                    configform.Show();
                 }
             },
             { "ApplyCurrentPatch", (args) =>

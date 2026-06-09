@@ -6,6 +6,7 @@ using KenshiCore.UI;
 using KenshiCore.Mods;
 using KenshiCore.ReverseEngineering;
 using KenshiCore.Utilities;
+using KenshiPatcher.Forms;
 
 namespace KenshiPatcher
 {
@@ -33,9 +34,9 @@ namespace KenshiPatcher
         private readonly string _extraction = "<<<";
         private readonly string _globalfunc = "@";
         private bool stopping=false;
+        private string? reason_to_stop = null;
         public ReverseEngineer? currentRE;
         private static readonly Regex GroupPattern = new Regex(@"^\((?<mods>[\w.,*]+)\)\((?<body>[^)]*\|.*)\)$", RegexOptions.Compiled);
-        //private bool definitions_printed = false;
         public Patcher()
         {
             definitions= new();
@@ -67,7 +68,7 @@ namespace KenshiPatcher
                 if (stopping)
                 {
                     stopping = false;
-                    CoreUtils.Prompt("Stopping due to Global Function");
+                    CoreUtils.Prompt(reason_to_stop ?? "Stopping due to Global Function");
                     return false;
                 }
                 savePatchedMod(path);
@@ -233,12 +234,14 @@ namespace KenshiPatcher
             {
                 return new Literal<object>(text.Substring(1, text.Length - 2));
             }
-
+            if (bool.TryParse(text, out var bval))
+                return new Literal<object>(bval);
+            if (long.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var lval))
+                return new Literal<object>(lval);
             // 2. Numeric literal
             if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var dval))
                 return new Literal<object>(dval);
-            if (long.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var lval))
-                return new Literal<object>(lval);
+            
 
             // 3. Table index: table[index]
             int bracket = text.IndexOf('[');
@@ -334,7 +337,8 @@ namespace KenshiPatcher
         {
             return ReverseEngineerRepository.Instance.ParseModSelector(selector);
         }
-        public void Stop() {
+        public void Stop(string? reason=null) {
+            reason_to_stop= reason;
             stopping = true;
         }
         private (string mode, string recordType, string condition) ParseRecordDefinition(string def)

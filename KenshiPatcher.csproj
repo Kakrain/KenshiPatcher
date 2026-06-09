@@ -6,7 +6,12 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>KPiconT.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="KPiconT.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="fernandreu.ScintillaNET" Version="4.2.0" />

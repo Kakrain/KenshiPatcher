@@ -1,6 +1,7 @@
 ﻿using KenshiCore.Mods;
 using KenshiCore.ReverseEngineering;
 using KenshiCore.UI;
+using KenshiCore.Utilities;
 using ScintillaNET;
 using System;
 using System.Collections;
@@ -17,6 +18,7 @@ using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 
 namespace KenshiPatcher.Forms
 {
+    //Guide
     public class MainForm : ProtoMainForm
     {
         private Boolean IndexChangeEnabled = true;
@@ -50,25 +52,7 @@ namespace KenshiPatcher.Forms
             repo.LoadSelectedMods();
             repo.excludeUnselectedMods = true;
         }
-        private bool isModPatched(ModItem mod)
-        {
-            string modpath = mod.getModFilePath()!;
-            string dir = Path.GetDirectoryName(modpath)!;
-            string modName = Path.GetFileNameWithoutExtension(modpath);
-            string patchPath = Path.Combine(dir, modName + ".patch");
-            string unpatchedPath = Path.Combine(dir, modName + ".unpatched");
-            if (!File.Exists(patchPath))
-                return false;
-            return File.Exists(unpatchedPath);
-        }
-        private string getUnpatchedPath(ModItem mod)
-        {
-            string modpath = mod.getModFilePath()!;
-            string dir = Path.GetDirectoryName(modpath)!;
-            string modName = Path.GetFileNameWithoutExtension(modpath);
-            string unpatchedPath = Path.Combine(dir, modName + ".unpatched");
-            return unpatchedPath;
-        }
+        
         private string getPatchStatus(ModItem mod)
         {
             string? modpath = mod.getModFilePath()!;
@@ -120,23 +104,14 @@ namespace KenshiPatcher.Forms
             RefreshColumn(1);
             modsListView.Refresh();
         }
-        private string? GetRealModPath(ModItem mod)
-        {
-            if (string.IsNullOrEmpty(mod.getModFilePath()))
-                return null;
-
-            if (isModPatched(mod))
-                return getUnpatchedPath(mod);
-
-            return mod.getModFilePath();
-        }
+        
 
         protected override async Task AfterModsLoadedAsync()
         {
             await Task.Run(() =>
                 RERepository.LoadFromMods(
                     mergedMods,
-                    GetRealModPath
+                    CoreUtils.GetRealModPath
                 )
             );
 
@@ -162,6 +137,18 @@ namespace KenshiPatcher.Forms
             }
             string dependencies = "not found Dependencies: " + (notfounddeps.Count == 0 ? "none" : string.Join("|", notfounddeps)) + "\n";
 
+            List<string> notfoundrefs = new();
+            foreach (string d in re.getReferences())
+            {
+                mergedMods.TryGetValue(d, out var m);
+                if (m == null)
+                {
+                    notfoundrefs.Add(d);
+                }
+            }
+            string references = "not found References: " + (notfoundrefs.Count == 0 ? "none" : string.Join("|", notfoundrefs)) + "\n";
+
+
             // Always run UI updates on the UI thread
             if (logform.InvokeRequired)
             {
@@ -176,6 +163,7 @@ namespace KenshiPatcher.Forms
             {
                 logform.LogString(headerText);
                 logform.LogString(dependencies, Color.Red);
+                logform.LogString(references, Color.IndianRed);
                 logform.Refresh();
             }
         }
