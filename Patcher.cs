@@ -223,7 +223,7 @@ namespace KenshiPatcher
         {
             text = text.Trim();
             CoreUtils.Print($"Parsing expression: {text}");
-            if (LooksLikeFunctionCall(text))
+            if (LooksLikeFunctionCall(text) || text.StartsWith("["))
             {
                 CoreUtils.Print($"Parsing function call expression: {text}");
                 var parser = new Parser(text);

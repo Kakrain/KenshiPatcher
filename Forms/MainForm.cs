@@ -8,7 +8,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing.Interop;
+using System.IO;
 using System.Linq;
+using System.Security.Cryptography.Xml;
 using System.Security.Policy;
 using System.Text;
 using System.Threading.Channels;
@@ -18,7 +20,6 @@ using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 
 namespace KenshiPatcher.Forms
 {
-    //Guide
     public class MainForm : ProtoMainForm
     {
         private Boolean IndexChangeEnabled = true;
@@ -101,8 +102,12 @@ namespace KenshiPatcher.Forms
                     "Patch Errors",
                     MessageBoxIcon.Warning);
             }
+            var logForm = getLogForm();
+            logForm.Reset();
+
             RefreshColumn(1);
             modsListView.Refresh();
+            RefreshSelectedModInfo();
         }
         
 
@@ -120,52 +125,71 @@ namespace KenshiPatcher.Forms
         private void ShowModInfo(ModItem mod)
         {
             ReverseEngineer re = new ReverseEngineer();
-            re.LoadModFile(mod.getModFilePath()!);
+            string modPath = mod.getModFilePath()!;
             var logform = getLogForm();
             if (logform == null) return;
 
+            try
+            {
+                re.LoadModFile(modPath);
+            }
+            catch (UnsupportedModFileException ex)
+            {
+                CoreUtils.Print($"Error loading mod file for {mod.Name}: {ex.Message}");
+                logform.LogString($"Error loading mod file for {mod.Name}: {ex.Message}");
+                return;
+                //re.LoadModFile(path);
+            }
             string headerText = re.GetHeaderAsString();
-
-            List<string> notfounddeps = new();
-            foreach (string d in re.getDependencies())
-            {
-                mergedMods.TryGetValue(d, out var m);
-                if (m == null)
-                {
-                    notfounddeps.Add(d);
-                }
-            }
-            string dependencies = "not found Dependencies: " + (notfounddeps.Count == 0 ? "none" : string.Join("|", notfounddeps)) + "\n";
-
-            List<string> notfoundrefs = new();
-            foreach (string d in re.getReferences())
-            {
-                mergedMods.TryGetValue(d, out var m);
-                if (m == null)
-                {
-                    notfoundrefs.Add(d);
-                }
-            }
-            string references = "not found References: " + (notfoundrefs.Count == 0 ? "none" : string.Join("|", notfoundrefs)) + "\n";
-
-
             // Always run UI updates on the UI thread
-            if (logform.InvokeRequired)
-            {
-                logform.BeginInvoke((Action)(() =>
-                {
-                    logform.LogString(headerText);
-                    logform.LogString(dependencies, Color.Red);
-                    logform.Refresh();
-                }));
-            }
-            else
+            string? patchLog =GetFileAsText(Path.ChangeExtension(modPath, null) + "_patch.log");
+            void UpdateUi()
             {
                 logform.LogString(headerText);
-                logform.LogString(dependencies, Color.Red);
-                logform.LogString(references, Color.IndianRed);
+                if(patchLog != null){
+                    logform.LogString($"Patch Log for {mod.Name}:{Environment.NewLine}",Color.Blue);
+                    logform.LogString($"{patchLog+ Environment.NewLine}", Color.AliceBlue);
+                }
+                logform.LogString(BuildMissingDependenciesList(re), Color.Red);
+                logform.LogString(BuildMissingReferencesList(re), Color.IndianRed);
                 logform.Refresh();
             }
+            if (logform.InvokeRequired)
+                logform.BeginInvoke((Action)UpdateUi);
+            else
+                UpdateUi();
+        }
+        private void RefreshSelectedModInfo()
+        {
+            var mods = getSelectedMods();
+
+            foreach (var mod in mods)
+            {
+                ShowModInfo(mod);
+            }
+        }
+        private string? GetFileAsText(string filePath)
+        {
+            string? result= null;
+            if(File.Exists(filePath))
+                result= File.ReadAllText(filePath);
+            return result;
+        }
+        private string BuildMissingDependenciesList(ReverseEngineer re)
+        {
+            var missing = re.getDependencies()
+                .Where(item => !mergedMods.ContainsKey(item))
+                .ToList();
+
+            return $"not found Dependencies : {(missing.Count == 0 ? "none" : string.Join("|", missing))}\n";
+        }
+        private string BuildMissingReferencesList(ReverseEngineer re)
+        {
+            var missing = re.getReferences()
+                .Where(item => !mergedMods.ContainsKey(item))
+                .ToList();
+
+            return $"not found References : {(missing.Count == 0 ? "none" : string.Join("|", missing))}\n";
         }
         private void Mainform_SelectedIndexChanged(object? sender, EventArgs? e)
         {

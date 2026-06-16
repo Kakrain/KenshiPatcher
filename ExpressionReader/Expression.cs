@@ -1,13 +1,9 @@
 ﻿using KenshiCore.Mods;
-using KenshiCore.OgreEngineering;
 using KenshiCore.ReverseEngineering;
 using KenshiCore.UI;
 using KenshiCore.Utilities;
 using KenshiPatcher.Forms;
-using System;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq.Expressions;
 using System.Text;
 using System.Threading.Tasks.Sources;
 using System.Windows.Forms;
@@ -123,7 +119,7 @@ namespace KenshiPatcher.ExpressionReader
     [DebuggerDisplay("{ToString()}")]
     public sealed class Literal<T> : Expression<T>
     {
-        private T value;//readonly
+        private T value;
 
         public Literal(T value) => this.value = value;
         public void setValue(T newValue)
@@ -300,24 +296,6 @@ namespace KenshiPatcher.ExpressionReader
             this.op = sop;
         }
     }
-    /*[DebuggerDisplay("{ToString()}")]
-    public class LiteralExpression : Expression<object>
-    {
-        private  object? value; //readonly
-
-        public LiteralExpression(object? val)
-        {
-            value = val;
-        }
-        public void setValue(object? val)
-        {
-            value = val;
-        }
-        public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null) => value!;
-
-
-        public override string ToString() => value?.ToString() ?? "null";
-    }*/
     [DebuggerDisplay("{ToString()}")]
     public class FunctionExpression<T> : Expression<T>
     {
@@ -325,8 +303,6 @@ namespace KenshiPatcher.ExpressionReader
         private readonly string functionname;
         private readonly Func<ModRecord, Dictionary<string, object?>?, T> func;
         private static readonly Random getrandom = new Random();
-
-        //public static readonly Dictionary<string, Func<ModRecord, List<Expression<object>>, T>> functions =
         public static readonly Dictionary<string, Func<ModRecord, Dictionary<string, object?>?, List<Expression<object>>, T>> functions =
             new()
             {
@@ -502,7 +478,6 @@ namespace KenshiPatcher.ExpressionReader
                 { "CategorizeGivenField", (r,locals, args) =>
                     {
                         var categories = new Dictionary<string, Expression<object>>();
-                        //var categories = new Dictionary<string, RecordGroupExpression>();
 
                         (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                         string field=ExpressionUtils.ExpectString(args[1],r,locals);
@@ -539,6 +514,30 @@ namespace KenshiPatcher.ExpressionReader
                             CoreUtils.Print(realpath.StartsWith("E_") ? realpath+": " + filepath : realpath);
                         }
                         return (T)Convert.ChangeType(realpath, typeof(T))!;
+                    }
+                },
+                {"Any", (r,locals, args) =>
+                    {
+                        Array array=ExpressionUtils.ExpectArray(args[0],r,locals);
+                        Func<object, bool> istrue = ExpressionUtils.ExpectLambda<object, bool>(args[1], r,locals);
+                        foreach (var item in array)
+                        {
+                            if(istrue(item))
+                                return (T) Convert.ChangeType(true, typeof(T))!;
+                        }
+                        return (T) Convert.ChangeType(false, typeof(T))!;
+                    }
+                },
+                {"All", (r,locals, args) =>
+                    {
+                        Array array=ExpressionUtils.ExpectArray(args[0],r,locals);
+                        Func<object, bool> istrue = ExpressionUtils.ExpectLambda<object, bool>(args[1], r,locals);
+                        foreach (var item in array)
+                        {
+                            if(!istrue(item))
+                                return (T) Convert.ChangeType(false, typeof(T))!;
+                        }
+                        return (T) Convert.ChangeType(true, typeof(T))!;
                     }
                 },
                 { "GetSkeletonLink", (r,locals, args) =>
@@ -598,7 +597,7 @@ namespace KenshiPatcher.ExpressionReader
 
         public override string ToString()
         {
-            return $"Array[{string.Join(", ", elements)}]";
+            return $"ArrayExpression[{string.Join(", ", elements)}]";
         }
     }
     [DebuggerDisplay("{ToString()}")]
@@ -878,6 +877,7 @@ namespace KenshiPatcher.ExpressionReader
     {
         private readonly Expression<object> target;
         private readonly Expression<object> index;
+        ModRecord? current = null;
 
         public IndexExpression(Expression<object> target, Expression<object> index)
         {
@@ -910,8 +910,9 @@ namespace KenshiPatcher.ExpressionReader
 
         public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null)
         {
-            var targetVal = target.Evaluate(r, locals);
-            var indexVal = index.Evaluate(r, locals);
+            current = r;
+            var targetVal = target.Evaluate(r, locals)!;
+            var indexVal = index.Evaluate(r, locals)!;
             if (targetVal is Dictionary<string, Expression<object>> dict)
             {
                 string key = indexVal!.ToString()!;
@@ -950,13 +951,12 @@ namespace KenshiPatcher.ExpressionReader
 
             return value;
         }
-
         public override string ToString()
         {
-            if (target is TableNameExpression tableexp)
+            if (target is TableNameExpression tableexp && current != null)
             {
                 Patcher.Instance.tables.TryGetValue(tableexp.Name, out var table);
-                string strindex=index.Evaluate(null)!.ToString()!;
+                string strindex= index.Evaluate(current)!.ToString()!;
                 return $"{tableexp.Name}[{strindex}]: {table![strindex]}";
             }
             return $"IndexExpression: target: {target}, index: {index}";
@@ -1305,12 +1305,12 @@ namespace KenshiPatcher.ExpressionReader
         {
             { "Print", args =>
                 {
-                    CoreUtils.Print(getStringFromArgs(args),1);
+                    CoreUtils.Prompt(getStringFromArgs(args));
                 }
             },
             { "Debug", args =>
                 {
-                    CoreUtils.Print(getStringFromArgs(args),0);
+                    CoreUtils.Print(getStringFromArgs(args));
                 }
             },
             { "InspectRecord", args =>
@@ -1350,12 +1350,6 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     Literal<object> literal=ExpressionUtils.ExpectLiteral(args[0]);
                     string question =ExpressionUtils.ExpectString(args[1]);
-                    
-                    /*if(args.Count>2)
-                    {
-                        object[] options = ExpressionUtils.ExpectArray(args[2]);
-                        literal.options = options;
-                    }*/
 
                     KPatcherConfigForm configform=KPatcherConfigForm.Instance;
                     configform.AddOption(literal,question);
