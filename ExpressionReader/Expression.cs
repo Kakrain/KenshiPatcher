@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks.Sources;
 using System.Windows.Forms;
 using System.Xml.Linq;
+using System.Text.RegularExpressions;
 using static ScintillaNET.Style;
 
 namespace KenshiPatcher.ExpressionReader
@@ -154,6 +155,7 @@ namespace KenshiPatcher.ExpressionReader
     [DebuggerDisplay("{ToString()}")]
     public sealed class BinaryExpression : Expression<object>
     {
+        const double eq_tolerance = 1e-9;
         public readonly Expression<object> left;
         public readonly Expression<object> right;
         public readonly string op;
@@ -207,7 +209,8 @@ namespace KenshiPatcher.ExpressionReader
                         return ValueCaster.ToInt64(l) == ValueCaster.ToInt64(r);
 
                     if ((lIsInt || lIsFloat) && (rIsInt || rIsFloat))
-                        return Math.Abs(ValueCaster.ToDouble(l) - ValueCaster.ToDouble(r)) < double.Epsilon;
+                        return Math.Abs(ValueCaster.ToDouble(l) - ValueCaster.ToDouble(r)) < eq_tolerance;
+                        //return Math.Abs(ValueCaster.ToDouble(l) - ValueCaster.ToDouble(r)) < double.Epsilon;
 
                     return l.Equals(r);
                 }
@@ -422,6 +425,13 @@ namespace KenshiPatcher.ExpressionReader
                         return (T)Convert.ChangeType(s0.ToLower().Contains(s1.ToLower()), typeof(T))!;
                     }
                 },
+                { "RegexMatch", (r,locals,args) =>
+                    {
+                        string input = ExpressionUtils.ExpectString(args[0], r, locals);
+                        string pattern = ExpressionUtils.ExpectString(args[1], r, locals);
+                        return (T)Convert.ChangeType(Regex.IsMatch(input, pattern),typeof(T))!;
+                    }
+                },
                 { "StartsWith", (r,locals, args) =>
                     {
                         string s0=ExpressionUtils.ExpectString(args[0],r,locals);
@@ -545,6 +555,19 @@ namespace KenshiPatcher.ExpressionReader
                         string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
                         string skeletonLink=FileAnalyzer.Instance.getSkeletonLink(filepath);
                         return (T)Convert.ChangeType(skeletonLink, typeof(T))!;
+                    }
+                },
+                { "Replace", (r,locals, args) =>
+                    {
+                        string main_string=ExpressionUtils.ExpectString(args[0],r,locals);
+                        string search_string=ExpressionUtils.ExpectString(args[1],r,locals);
+                        string replace_string=ExpressionUtils.ExpectString(args[2],r,locals);
+
+                         bool ignoreCase =
+                        args.Count > 3 &&
+                        ExpressionUtils.ExpectBool(args[3], r, locals);
+
+                        return (T)Convert.ChangeType(main_string.Replace(search_string, replace_string,ignoreCase? StringComparison.OrdinalIgnoreCase: StringComparison.Ordinal), typeof(T))!;
                     }
                 },
                 };
@@ -1361,6 +1384,26 @@ namespace KenshiPatcher.ExpressionReader
                     configform.Show();
                 }
             },
+            { "SkipLinesIf",args=>
+                {
+                    bool condition = ExpressionUtils.ExpectBool(args[0]);
+                    int n=ExpressionUtils.ExpectInt(args[1]);
+                    if (condition)
+                    {
+                        Patcher.Instance.SkipLines(n);
+                    }
+                }
+            },
+            { "RunLinesIf",args=>
+                {
+                    bool condition = ExpressionUtils.ExpectBool(args[0]);
+                    int n=ExpressionUtils.ExpectInt(args[1]);
+                    if (!condition)
+                    {
+                        Patcher.Instance.SkipLines(n);
+                    }
+                }
+            },
             { "ApplyCurrentPatch", (args) =>
                 {
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
@@ -1531,14 +1574,11 @@ namespace KenshiPatcher.ExpressionReader
                 }
                 return sb.ToString();
             }
-
-
             public GlobalFunctionExpression(string name, List<Expression<object>> args)
             {
                 this.name = name;
                 this.args = args;
             }
-
             public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null)
             {
                 if (!globalFuncs.TryGetValue(name, out var func))

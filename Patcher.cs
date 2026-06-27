@@ -35,6 +35,7 @@ namespace KenshiPatcher
         private readonly string _globalfunc = "@";
         private bool stopping=false;
         private string? reason_to_stop = null;
+        private int lines_to_skip = 0;
         public ReverseEngineer? currentRE;
         private static readonly Regex GroupPattern = new Regex(@"^\((?<mods>[\w.,*]+)\)\((?<body>[^)]*\|.*)\)$", RegexOptions.Compiled);
         public Patcher()
@@ -52,6 +53,10 @@ namespace KenshiPatcher
         public async Task<bool> RunPatchAsync(string path)
         {
             return await Task.Run(() => runPatch(path));
+        }
+        public void SkipLines(int count)
+        {
+            lines_to_skip = count;
         }
         public bool runPatch(string path)
         {
@@ -92,6 +97,12 @@ namespace KenshiPatcher
                 if (stopping)
                 {
                     return;
+                }
+                if(lines_to_skip > 0)
+                {
+                    lines_to_skip--;
+                    lineNumber++;
+                    continue;
                 }
                 lineNumber++;
                 string line = CleanLine(rawLine);
