@@ -1358,6 +1358,34 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
             },
+            { "InspectExtraData", args =>
+                {
+                    var (names,records) =ExpressionUtils.ExpectGroupRecord(args[0]);
+                    ReverseEngineerRepository RER=ReverseEngineerRepository.Instance;
+                    string? category=null;
+                    if (args.Count() > 1)
+                    {
+                        category =ExpressionUtils.ExpectString(args[1]);
+                    }
+                    ProgressController progress=ProgressController.Instance;
+                    foreach(var rec in records)
+                    {
+                        Dictionary<string, int[]>? extraData = rec.GetExtraData(category);
+                        CoreUtils.Print($"record: {rec.ToString()}");
+                        int c=extraData?.Count ?? 0;
+                        progress.Initialize(c);
+                        CoreUtils.Print($"Extra Data Count: {c}");
+                        CoreUtils.Print($"Extra Data Category: {category ?? "all"}");
+                        foreach (var kv in extraData ?? new Dictionary<string, int[]>())
+                        {
+                            progress.ReportStep($"record: {rec.ToString()} extra data: {kv.Key} => [{string.Join(",", kv.Value)}]");
+                            ModRecord? sourceRecord = RER.searchModRecordByStringIdGlobally(kv.Key,true);
+                            CoreUtils.Print($"---{sourceRecord?.ToString() ?? kv.Key +"not found"}: [{string.Join(",", kv.Value)}]");
+                        }
+                        progress.Finish($"Finished inspecting record: {rec.ToString()}");
+                    }
+                }
+            },
             { "ShowRecordEvolution", args =>
                 {
                     string stringid=ExpressionUtils.ExpectString(args[0]);
@@ -1565,7 +1593,7 @@ namespace KenshiPatcher.ExpressionReader
                 }
             },
         };
-            private static string getStringFromArgs(List<Expression<object>> args)
+        private static string getStringFromArgs(List<Expression<object>> args)
             {
                 StringBuilder sb = new StringBuilder();
                 foreach (var arg in args)

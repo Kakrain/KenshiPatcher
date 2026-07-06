@@ -168,12 +168,31 @@ namespace KenshiPatcher.Forms
                 ShowModInfo(mod);
             }
         }
-        private string? GetFileAsText(string filePath)
+        /*private string? GetFileAsText(string filePath)
         {
             string? result= null;
             if(File.Exists(filePath))
                 result= File.ReadAllText(filePath);
             return result;
+        }*/
+        private string? GetFileAsText(string filePath)
+        {
+            if (!File.Exists(filePath))
+                return null;
+
+            for (int i = 0; i < 5; i++)
+            {
+                try
+                {
+                    return File.ReadAllText(filePath);
+                }
+                catch (IOException)
+                {
+                    Thread.Sleep(50); // wait for writer to finish
+                }
+            }
+
+            return "file is busy";
         }
         private string BuildMissingDependenciesList(ReverseEngineer re)
         {
