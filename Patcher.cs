@@ -480,6 +480,31 @@ FilterUniqueRecordsByPreference(IEnumerable<(ModRecord record, string sourceModN
             progress.Finish();
             return (resultModNames, resultRecords);
         }
+        private static readonly Dictionary<(string, bool), ModRecord?> _resolveGlobalCache = new();
+        public static ModRecord? Resolve(string id, bool getEarly = false)
+        {
+            var key = (id, getEarly);
+            if (_resolveGlobalCache.TryGetValue(key, out var cached))
+                return cached;
+            var baseRec = ReverseEngineerRepository.Instance
+                .searchModRecordByStringIdGlobally(id, getEarly);
+
+            if (baseRec == null)
+                return null;
+
+            if (!getEarly)
+            {
+                var localPatch = Patcher.Instance.currentRE!
+                    .searchModRecordByStringIdLocally(id);
+
+                if (localPatch != null)
+                {
+                    baseRec.applyChangesFrom(localPatch);
+                }
+            }
+            _resolveGlobalCache[key] = baseRec;
+            return baseRec;
+        }
         private string? ExtractParenthesesContent(ref string text)
         {
             text = text.Trim();

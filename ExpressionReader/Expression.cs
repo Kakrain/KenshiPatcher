@@ -4,11 +4,13 @@ using KenshiCore.UI;
 using KenshiCore.Utilities;
 using KenshiPatcher.Forms;
 using System.Diagnostics;
+using System.Linq;
+using System.Linq.Expressions;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks.Sources;
 using System.Windows.Forms;
 using System.Xml.Linq;
-using System.Text.RegularExpressions;
 using static ScintillaNET.Style;
 
 namespace KenshiPatcher.ExpressionReader
@@ -569,8 +571,133 @@ namespace KenshiPatcher.ExpressionReader
 
                         return (T)Convert.ChangeType(main_string.Replace(search_string, replace_string,ignoreCase? StringComparison.OrdinalIgnoreCase: StringComparison.Ordinal), typeof(T))!;
                     }
+                },{
+                    "ExtractChildrenUntil", (r, locals, args) =>
+                    {
+                        (List<string> modNames, List<ModRecord> sources) =
+                            ExpressionUtils.ExpectGroupRecord(args[0]);
+                        var matchExpr = args[1];
+                        var stopExpr = args[2];
+                        string category = args.Count > 3
+                            ? ExpressionUtils.ExpectString(args[3], r)
+                            : "lines";
+                        bool pruneBranch = args.Count > 4
+                            ? ExpressionUtils.ExpectBool(args[4], r, locals)
+                            : false;
+                        
+                        int maxVisits = args.Count > 5
+                            ? ExpressionUtils.ExpectInt(args[5], r)
+                            : 50000;
+                        bool getEarly = args.Count > 6
+                            ? ExpressionUtils.ExpectBool(args[6], r, locals)    
+                            : true;
+
+
+                        ProgressController progress = ProgressController.Instance;
+                        List<string> resultModNames = new();
+                        List<ModRecord> resultRecords = new();
+
+                        progress.Initialize(sources.Count);
+                        int i= 0;
+                        foreach (var (modName, source) in modNames.Zip(sources))
+                        {
+                            HashSet<string> visitedIds = new HashSet<string>(StringComparer.Ordinal);
+                            Dictionary<string, ModRecord?> resolveCache = new Dictionary<string, ModRecord?>(StringComparer.Ordinal);
+                            //int visits = 0;
+
+                            void Traverse(ModRecord rec, int visits)
+                            {
+                                if (++visits > maxVisits)
+                                    return;
+
+                                if (!visitedIds.Add(rec.StringId))
+                                    return;
+
+                                if (Convert.ToBoolean(stopExpr.Evaluate(rec, locals)))
+                                    return;
+                                if(Convert.ToBoolean(matchExpr.Evaluate(rec, locals)))
+                                {
+                                    resultModNames.Add(modName);
+                                    resultRecords.Add(rec);
+
+                                    if (pruneBranch)
+                                        return;
+                                }
+
+                                Dictionary<string,int[]>? children = rec.GetExtraData(category);
+
+                                if (children == null)
+                                    return;
+
+                                foreach (var kv in children)
+                                {
+                                    var child = Get(kv.Key);
+                                    if (child != null)
+                                        Traverse(child,visits+1);
+                                }
+                            }
+
+                            ModRecord? Get(string id)
+                            {
+                                if (!resolveCache.TryGetValue(id, out var rec))
+                                {
+                                    rec = Patcher.Resolve(id, getEarly);
+                                    resolveCache[id] = rec;
+                                }
+
+                                return rec;
+                            }
+
+                            var kids = source.GetExtraData(category);
+                            if (kids != null)
+                            {
+                                foreach (var kv in kids)
+                                {
+                                    var child = Get(kv.Key);
+                                    if (child != null)
+                                        Traverse(child,1);
+                                }
+                            }
+                            i++;
+                            progress.Report(i, $"ExtractChildrenUntil mod {i}");
+                        }
+
+                        progress.Finish();
+                        return (T)(object)(new RecordGroupExpression((resultModNames, resultRecords)));
+                    }
                 },
-                };
+            { "ChanceOfExtraData", (r,locals, args) =>
+            {
+                string category = ExpressionUtils.ExpectString(args[0],r,locals);
+                Expression<object> selector = args[1];
+                int value_index = ExpressionUtils.ExpectInt(args[2],r,locals);
+                Func<ModRecord,bool> isPool= rr=>true;
+
+                if (args.Count > 3)
+                    isPool= rr=>ExpressionUtils.ExpectBool(args[3], rr, locals);
+
+                int total = 0;
+                int poolTotal = 0;
+                Dictionary<string,int[]>? extraData = r.GetExtraData(category);
+                double result=0.0;
+                if(extraData == null)
+                    return (T)Convert.ChangeType(result, typeof(T))!;
+                foreach (var (strid, vars) in extraData)
+                {
+                    ModRecord? rec = Patcher.Resolve(strid);
+                    if(rec == null)
+                        continue;
+                    if(isPool(rec))
+                        poolTotal+= vars[value_index];
+                    if(ExpressionUtils.ExpectBool(selector, rec, locals))
+                        total+= vars[value_index];
+                }
+                if (poolTotal > 0)
+                    result = 100.0 * total / poolTotal;
+                return (T)Convert.ChangeType(result, typeof(T))!;
+            }},
+        };
+        
         public FunctionExpression(string funcName, List<Expression<object>> args)
         {
             functionname = funcName;
@@ -776,7 +903,7 @@ namespace KenshiPatcher.ExpressionReader
                             {
                                 foreach (var kv in children)
                                 {
-                                    var child = Resolve(kv.Key, getEarly);
+                                    var child = Patcher.Resolve(kv.Key, getEarly);
                                     if (child != null && Detect(child))
                                         return true;
                                 }
@@ -790,32 +917,6 @@ namespace KenshiPatcher.ExpressionReader
                     }
             }
             };
-        private static readonly Dictionary<(string, bool), ModRecord?> _resolveGlobalCache = new();
-        
-        private static ModRecord? Resolve(string id, bool getEarly = false)
-        {
-            var key = (id, getEarly);
-            if (_resolveGlobalCache.TryGetValue(key, out var cached))
-                return cached;
-            var baseRec = ReverseEngineerRepository.Instance
-                .searchModRecordByStringIdGlobally(id, getEarly);
-
-            if (baseRec == null)
-                return null;
-
-            if (!getEarly)
-            {
-                var localPatch = Patcher.Instance.currentRE!
-                    .searchModRecordByStringIdLocally(id);
-
-                if (localPatch != null)
-                {
-                    baseRec.applyChangesFrom(localPatch);
-                }
-            }
-            _resolveGlobalCache[key] = baseRec;
-            return baseRec;
-        }
         private readonly List<Expression<object>> arguments;
         private static bool IsAnyChildUntil(
         ModRecord root,
@@ -861,7 +962,7 @@ namespace KenshiPatcher.ExpressionReader
             {
                 if (!resolveCache.TryGetValue(id, out var rec))
                 {
-                    rec = Resolve(id, getEarly);
+                    rec = Patcher.Resolve(id, getEarly);
                     resolveCache[id] = rec;
                 }
                 return rec;
