@@ -8,6 +8,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Threading.Tasks.Sources;
 using System.Windows.Forms;
 using System.Xml.Linq;
@@ -559,6 +560,35 @@ namespace KenshiPatcher.ExpressionReader
                         return (T)Convert.ChangeType(skeletonLink, typeof(T))!;
                     }
                 },
+                { "Intersects", (r,locals, args) =>
+                    {
+                        string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
+                        Array p1 =ExpressionUtils.ExpectArray(args[1],r,locals);
+                        Array p2 =ExpressionUtils.ExpectArray(args[2],r,locals);
+                        bool fast=false;
+                        if(args.Count > 3)
+                        {
+                            fast = ExpressionUtils.ExpectBool(args[3],r,locals);
+                        }
+
+                        bool intersects=FileAnalyzer.Instance.Intersects(filepath, p1, p2,fast);
+                        return (T)Convert.ChangeType(intersects, typeof(T));
+                    }
+                },
+                { "GetIntersectionRatio", (r,locals, args) =>
+                    {
+                        string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
+                        Array p1 =ExpressionUtils.ExpectArray(args[1],r,locals);
+                        Array p2 =ExpressionUtils.ExpectArray(args[2],r,locals);
+                        int samples=-1;
+                        if(args.Count > 3)
+                        {
+                            samples = ExpressionUtils.ExpectInt(args[3],r,locals);
+                        }
+                        double intersectionRatio=FileAnalyzer.Instance.GetIntersectionRatio(filepath, p1, p2, samples);
+                        return (T)Convert.ChangeType(intersectionRatio, typeof(T));
+                    }
+                },
                 { "Replace", (r,locals, args) =>
                     {
                         string main_string=ExpressionUtils.ExpectString(args[0],r,locals);
@@ -695,6 +725,34 @@ namespace KenshiPatcher.ExpressionReader
                 if (poolTotal > 0)
                     result = 100.0 * total / poolTotal;
                 return (T)Convert.ChangeType(result, typeof(T))!;
+            }},
+            { "BitwiseAnd", (r,locals, args) =>
+            {
+                int a = ExpressionUtils.ExpectInt(args[0],r,locals);
+                int b = ExpressionUtils.ExpectInt(args[1],r,locals);
+                return (T)Convert.ChangeType(a & b, typeof(T))!;
+            }},
+            { "BitwiseOr", (r,locals, args) =>
+            {
+                int a = ExpressionUtils.ExpectInt(args[0],r,locals);
+                int b = ExpressionUtils.ExpectInt(args[1],r,locals);
+                return (T)Convert.ChangeType(a | b, typeof(T))!;
+            }},
+            { "AddFlag", (r,locals, args) =>
+            {
+                return functions!["BitwiseOr"](r,locals, args);
+            }},
+            { "RemoveFlag", (r,locals, args) =>
+            {
+                int a = ExpressionUtils.ExpectInt(args[0],r,locals);
+                int b = ExpressionUtils.ExpectInt(args[1],r,locals);
+                return (T)Convert.ChangeType(a & ~b, typeof(T))!;
+            }},
+            { "HasFlag", (r,locals, args) =>
+            {
+                int a = ExpressionUtils.ExpectInt(args[0],r,locals);
+                int b = ExpressionUtils.ExpectInt(args[1],r,locals);
+                return (T)Convert.ChangeType((a & b) == b, typeof(T))!;
             }},
         };
         

@@ -37,9 +37,10 @@ namespace KenshiPatcher.Forms
                     Secondary = Color.FromArgb(unchecked((int)0xFF4C433A)),
                     Foreground = Color.FromArgb(unchecked((int)0xFFE9E4D7))
                 });
-            
+            ReverseEngineerRepository.Instance.ignoreKenshiFixer = false;
             AddColumn("Patch Status", mod => getPatchStatus(mod),150);
             AddButton("Patch it!", PatchItClick);
+            AddButton("Reset Patch", ResetPatchClick);
             modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
         }
 
@@ -109,7 +110,48 @@ namespace KenshiPatcher.Forms
             modsListView.Refresh();
             RefreshSelectedModInfo();
         }
-        
+        private void ResetPatchClick(object? sender, EventArgs e)
+        {
+            var mods = getSelectedMods()
+                .Where(m => File.Exists(m.getPatchPath()))
+                .ToList();
+
+            if (mods.Count == 0)
+            {
+                UiService.ShowMessage("No patched mod selected", "Error", MessageBoxIcon.Error);
+                return;
+            }
+
+            foreach (var mod in mods)
+            {
+                string? modPath = mod.getModFilePath();
+                if (modPath == null)
+                    continue;
+
+                string dir = Path.GetDirectoryName(modPath)!;
+                string modName = Path.GetFileNameWithoutExtension(modPath);
+
+                string unpatchedPath = Path.Combine(dir, modName + ".unpatched");
+                string logPath = Path.Combine(dir, modName + "_patch.log");
+
+                if (!File.Exists(unpatchedPath))
+                {
+                    //UiService.ShowMessage( $"No backup found for {modName}.mod","Error", MessageBoxIcon.Error);
+                    continue;
+                }
+
+                File.Copy(unpatchedPath, modPath, overwrite: true);
+
+                File.Delete(unpatchedPath);
+
+                if (File.Exists(logPath))
+                    File.Delete(logPath);
+            }
+
+            RefreshColumn(1);
+            modsListView.Refresh();
+            RefreshSelectedModInfo();
+        }
 
         protected override async Task AfterModsLoadedAsync()
         {
