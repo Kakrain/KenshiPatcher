@@ -1,7 +1,7 @@
 ﻿using KenshiCore.Mods;
 using KenshiCore.Utilities;
-using KenshiPatcher;
 using KenshiPatcher.ExpressionReader;
+using KenshiPatcher.PatchModel;
 using static KenshiPatcher.ExpressionReader.IndexExpression;
 using static System.Net.Mime.MediaTypeNames;
 
@@ -101,7 +101,6 @@ class Parser
 
             Eat(TokenType.Operator);
             var right = ParseExpression(opPrecedence + 1);
-            //left = new BinaryExpression(left, right, op!);
             if (op == "->"||op=="~>")
             {
                 if (!(right is ProcedureExpression procExpr))
@@ -165,15 +164,6 @@ class Parser
                         return ParsePostfix(expr);
                     }
                     Eat(TokenType.Identifier);
-
-                    /*if (current.Type == TokenType.LBracket)
-                        expr = new TableNameExpression(name);
-                    else if (current.Type == TokenType.LParen)
-                        expr = ParseFunctionCall(name);
-                    else
-                        expr = Patcher.Instance.definitions[name];
-                    */
-
                     if (current.Type == TokenType.LBracket)
                     {
                         expr = new TableNameExpression(name);
@@ -187,7 +177,7 @@ class Parser
                         expr = def;
                     }
                     else if(Patcher.Instance.tables.ContainsKey(name))
-                    {//if (Patcher.Instance.definitions.TryGetValue(name, out var deftable))
+                    {
                         expr = new TableNameExpression(name);
                     }
                     else

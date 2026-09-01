@@ -9,14 +9,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing.Interop;
 using System.IO;
+using KenshiPatcher.PatchModel;
 using System.Linq;
 using System.Security.Cryptography.Xml;
 using System.Security.Policy;
 using System.Text;
-using System.Threading.Channels;
-using System.Threading.Tasks;
-using static System.Windows.Forms.AxHost;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 
 namespace KenshiPatcher.Forms
 {
@@ -155,22 +152,17 @@ namespace KenshiPatcher.Forms
 
         protected override async Task AfterModsLoadedAsync()
         {
-            await Task.Run(() =>
-                RERepository.LoadFromMods(
-                    mergedMods,
-                    CoreUtils.GetRealModPath
-                )
-            );
+            await Task.Run(() => RERepository.LoadFromMods( mergedMods));//,CoreUtils.GetRealModPath
 
-            KPatcher = new Patcher();
+            KPatcher = Patcher.Instance;
         }
         private void ShowModInfo(ModItem mod)
         {
             ReverseEngineer re = new ReverseEngineer();
             string modPath = mod.getModFilePath()!;
             var logform = getLogForm();
-            if (logform == null) return;
-
+            if ((logform == null)|| (modPath == null)) return;
+            //if (modPath == null) return;
             try
             {
                 re.LoadModFile(modPath);

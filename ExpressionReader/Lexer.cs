@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -50,9 +51,9 @@ namespace KenshiPatcher.ExpressionReader
 
             string numText = text.Substring(start, pos - start);
             if (numText.Contains('.'))
-                return new Token { Type = TokenType.DoubleLiteral, OriginalText = numText, LiteralValue = double.Parse(numText) };
+                return new Token { Type = TokenType.DoubleLiteral, OriginalText = numText, LiteralValue = double.Parse(numText,NumberStyles.Float,CultureInfo.InvariantCulture) };
             else
-                return new Token { Type = TokenType.IntLiteral, OriginalText = numText, LiteralValue = int.Parse(numText) };
+                return new Token { Type = TokenType.IntLiteral, OriginalText = numText, LiteralValue = int.Parse(numText, NumberStyles.Integer, CultureInfo.InvariantCulture) };
         }
 
         private Token ReadIdentifierOrBool()

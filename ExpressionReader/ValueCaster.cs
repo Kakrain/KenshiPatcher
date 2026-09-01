@@ -117,6 +117,8 @@ namespace KenshiPatcher.ExpressionReader
 
                 case long l:
                     return l;
+                case bool b:
+                    return b ? 1 : 0;
 
                 case double d:
                     return (long)Math.Round(d);

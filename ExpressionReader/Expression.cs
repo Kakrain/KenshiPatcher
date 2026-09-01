@@ -3,6 +3,8 @@ using KenshiCore.ReverseEngineering;
 using KenshiCore.UI;
 using KenshiCore.Utilities;
 using KenshiPatcher.Forms;
+using KenshiPatcher.PatchModel;
+using System.Data;
 using System.Diagnostics;
 using System.Linq;
 using System.Linq.Expressions;
@@ -37,7 +39,9 @@ namespace KenshiPatcher.ExpressionReader
             object o = expression.Evaluate(r, locals)!;
             if (o is (List<string> names, List<ModRecord> records))
                 return (names, records);
-            throw new FormatException($"Expression is expected to be a group: {expression.ToString()}");
+            if (o is RecordGroupExpression group)
+                return group.group;
+            throw new FormatException($"Expression is expected to be a group. " + $"Expression={expression}, " + $"EvaluatedType={o?.GetType().FullName}, " + $"EvaluatedValue={o}");
         }
         public static Array ExpectArray(Expression<object> expression, ModRecord? r = null, Dictionary<string, object?>? locals = null)
         {
@@ -135,6 +139,11 @@ namespace KenshiPatcher.ExpressionReader
 
         public override string ToString()
         {
+            if (value is System.Collections.IEnumerable enumerable && value is not string)
+            {
+                var items = enumerable.Cast<object?>().Select(x => x?.ToString() ?? "null");
+                return $"Literal<{value.GetType()}> :[{string.Join(", ", items)}]";
+            }
             return $"Literal<{value?.GetType()}> :{value?.ToString() ?? "null"}";
         }
 
@@ -375,6 +384,12 @@ namespace KenshiPatcher.ExpressionReader
                         return (T)Convert.ChangeType(result, typeof(T))!;
                     }
                 },
+                { "Length", (r,locals, args) =>
+                    {
+                        Array arr =ExpressionUtils.ExpectArray(args[0],r,locals);
+                        return (T)Convert.ChangeType(arr.Length, typeof(T))!;
+                    }
+                },
                 { "ArrIndex", (r,locals, args) =>
                     {
                         var arrObj = args[0].Evaluate(r,locals);
@@ -553,6 +568,30 @@ namespace KenshiPatcher.ExpressionReader
                         return (T) Convert.ChangeType(true, typeof(T))!;
                     }
                 },
+                {"SumInt", (r,locals, args) =>
+                    {
+                        Array array=ExpressionUtils.ExpectArray(args[0],r,locals);
+                        Func<object, int> getvalue = ExpressionUtils.ExpectLambda<object, int>(args[1], r,locals);
+                        int sum = 0;
+                        foreach (var item in array)
+                        {
+                            sum += getvalue(item);
+                        }
+                        return (T) Convert.ChangeType(sum, typeof(T))!;
+                    }
+                },
+                {"SumFloat", (r,locals, args) =>
+                    {
+                        Array array=ExpressionUtils.ExpectArray(args[0],r,locals);
+                        Func<object, float> getvalue = ExpressionUtils.ExpectLambda<object, float>(args[1], r,locals);
+                        float sum = 0;
+                        foreach (var item in array)
+                        {
+                            sum += getvalue(item);
+                        }
+                        return (T) Convert.ChangeType(sum, typeof(T))!;
+                    }
+                },
                 { "GetSkeletonLink", (r,locals, args) =>
                     {
                         string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
@@ -573,6 +612,33 @@ namespace KenshiPatcher.ExpressionReader
 
                         bool intersects=FileAnalyzer.Instance.Intersects(filepath, p1, p2,fast);
                         return (T)Convert.ChangeType(intersects, typeof(T));
+                    }
+                },
+                { "IsInfluencedByBone", (r,locals, args) =>
+                    {
+                        string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
+                        int bone =ExpressionUtils.ExpectInt(args[1],r,locals);
+
+
+                        bool influenced=FileAnalyzer.Instance.IsInfluencedByBone(filepath, bone);
+                        return (T)Convert.ChangeType(influenced, typeof(T));
+                    }
+                },
+                { "GetBoneInfluence", (r,locals, args) =>
+                    {
+                        string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
+                        int bone =ExpressionUtils.ExpectInt(args[1],r,locals);
+
+
+                        float influence=FileAnalyzer.Instance.GetBoneInfluence(filepath, bone);
+                        return (T)Convert.ChangeType(influence, typeof(T));
+                    }
+                },
+                { "GetBoneInfluenceInfo", (r,locals, args) =>
+                    {
+                        string filepath=ExpressionUtils.ExpectString(args[0],r,locals);
+                        string info=FileAnalyzer.Instance.GetBoneInfluenceInfo(filepath);
+                        return (T)Convert.ChangeType(info, typeof(T));
                     }
                 },
                 { "GetIntersectionRatio", (r,locals, args) =>
@@ -725,6 +791,64 @@ namespace KenshiPatcher.ExpressionReader
                 if (poolTotal > 0)
                     result = 100.0 * total / poolTotal;
                 return (T)Convert.ChangeType(result, typeof(T))!;
+            }},
+            { "GetExtraDataArguments", (r,locals, args) =>
+            {
+                string category = ExpressionUtils.ExpectString(args[0], r, locals);
+
+                Dictionary<string, int[]>? extraData = r.GetExtraData(category);
+
+                if (extraData == null)
+                    return (T)(object)Array.Empty<int[]>();
+
+                var result = new List<int[]>();
+
+                foreach (var (strid, values) in extraData)
+                {
+                    ModRecord? record = Patcher.Resolve(strid);
+                    if (record == null || record.isRemoved())
+                        continue;
+                    result.Add(values);
+                }
+
+                return (T)(object)result.ToArray();
+            }},
+            { "GetExtraDataRecords", (r,locals, args) =>
+            {
+                string category = ExpressionUtils.ExpectString(args[0],r,locals);
+                List<string> res_modnames = new List<string>();
+                List<ModRecord> res_records = new List<ModRecord>();
+
+                Dictionary<string,int[]>? extraData = r.GetExtraData(category);
+                if(extraData == null)
+                    return (T)(object)(new RecordGroupExpression((res_modnames, res_records)));
+                foreach (var (strid, vars) in extraData)
+                {
+                    ModRecord? rec = Patcher.Resolve(strid);
+                    if(rec == null || rec.isRemoved())
+                        continue;
+                    res_modnames.Add("gamedata.base");
+                    res_records.Add(rec);
+                }
+                return (T)(object)(new RecordGroupExpression((res_modnames, res_records)));
+            }},
+            { "GetFieldAsArray", (r,locals, args) =>
+            {
+                (List<string> modNames, List<ModRecord> sources) = ExpressionUtils.ExpectGroupRecord(args[0],r,locals);
+                string field = ExpressionUtils.ExpectString(args[1],r,locals);
+
+                var result = new List<object>();
+                foreach (var record in sources)
+                {
+                    result.Add(record.GetFieldAsObject(field)!);
+                }
+                return (T)(object)result.ToArray();
+            }},
+            { "SortArray", (r,locals, args) =>
+            {
+                Array arr =ExpressionUtils.ExpectArray(args[0],r,locals);
+                Array.Sort((object[])arr);
+                return (T)(object)arr;
             }},
             { "BitwiseAnd", (r,locals, args) =>
             {
@@ -1090,7 +1214,7 @@ namespace KenshiPatcher.ExpressionReader
             } 
         }
 
-        public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null)
+        /*public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null)
         {
             current = r;
             var targetVal = target.Evaluate(r, locals)!;
@@ -1132,6 +1256,68 @@ namespace KenshiPatcher.ExpressionReader
                 return expr.Evaluate(r)!;
 
             return value;
+        }*/
+        public override object EvaluateTyped( ModRecord? r, Dictionary<string, object?>? locals = null)
+        {
+            current = r;
+
+            object? targetVal;
+
+            if (target is TableNameExpression tableName)
+            {
+                // A named definition can itself be indexable.
+                if (Patcher.Instance.definitions.TryGetValue(tableName.Name, out var definition))
+                {
+                    targetVal = definition.Evaluate(r, locals);
+                }
+                else
+                {
+                    targetVal = tableName.Evaluate(r, locals);
+                }
+            }
+            else
+            {
+                targetVal = target.Evaluate(r, locals);
+            }
+
+            var indexVal = index.Evaluate(r, locals)!;
+
+            if (targetVal is Dictionary<string, Expression<object>> dict)
+            {
+                string key = indexVal.ToString()!;
+
+                if (dict.TryGetValue(key, out var exprvalue))
+                    return exprvalue.Evaluate(r, locals)!;
+
+                throw new Exception($"Key '{key}' not found");
+            }
+
+            if (targetVal is System.Collections.IList list)
+            {
+                int idx = Convert.ToInt32(indexVal);
+
+                if (idx < 0 || idx >= list.Count)
+                    throw new Exception($"Array index {idx} out of range");
+
+                return list[idx]!;
+            }
+
+            // Existing table lookup
+            var targetStr = targetVal?.ToString();
+            var indexStr = indexVal?.ToString();
+
+            if (targetStr == null || indexStr == null)
+                throw new Exception("IndexExpression: null table name or key");
+
+            if (!Patcher.Instance.tables.TryGetValue(targetStr, out var table))
+                throw new Exception($"Table '{targetStr}' not found");
+
+            if (!table.TryGetValue(indexStr, out var value))
+                throw new Exception($"Key '{indexStr}' not found in table '{targetStr}'");
+
+            return value is Expression<object> expr
+                ? expr.Evaluate(r, locals)!
+                : value;
         }
         public override string ToString()
         {
@@ -1216,6 +1402,7 @@ namespace KenshiPatcher.ExpressionReader
                     string strfieldname=ExpressionUtils.ExpectString(args[0],record);
                     string value = ValueCaster.ToInvariantString(args[1].Evaluate(record));
                     string strtype=ExpressionUtils.ExpectString(args[2],record);
+
                     Patcher.Instance.currentRE!.ForceSetField(record,strfieldname,value,strtype);
                     return null;
                 }
@@ -1325,6 +1512,35 @@ namespace KenshiPatcher.ExpressionReader
                 var lambda = ExpressionUtils.ExpectLambda(args[2], source);
                 object? value = lambda(new object?[] { sourceValue });
                 Patcher.Instance.currentRE!.SetField(target, fieldName, ValueCaster.ToInvariantString(value));
+                return null;
+            }},
+            { "AddExtraDataFromOther", (target, source, args) =>
+            {
+                string category_source = ExpressionUtils.ExpectString(args[1], target);
+                string category_target = ExpressionUtils.ExpectString(args[2], target);
+                int[]? arrayvar = null;
+                if (args.Count>3)
+                {
+                    var result = args[3].Evaluate(target);
+                    if (result is int[] arr)
+                        arrayvar = arr;
+                    else if (result is object[] objArr)
+                    {
+                        arrayvar = objArr.Select(o => (int)Convert.ChangeType(o!, typeof(int))).ToArray();
+                    }
+                    else
+                        throw new FormatException($"Invalid array returned for category: {result}");
+                }
+                Dictionary<string,int[]>? extraData = source.GetExtraData(category_source);
+                if(extraData == null)
+                    return null;
+                foreach (var (strid, vars) in extraData)
+                {
+                    ModRecord? rec = Patcher.Resolve(strid);
+                    if(rec == null || rec.isRemoved())
+                        continue;
+                    Patcher.Instance.currentRE!.AddExtraData(target,rec,category_target,arrayvar==null?null:arrayvar);
+                }
                 return null;
             }}
         };
@@ -1482,22 +1698,69 @@ namespace KenshiPatcher.ExpressionReader
         {
             private readonly string name;
             private readonly List<Expression<object>> args;
-
-            public static readonly Dictionary<string, Action<List<Expression<object>>>> globalFuncs = new()
+        public static readonly Dictionary<string, Action<PatcherGlobalFunction>> globalParsers = new()
         {
-            { "Print", args =>
+            ["ForEach"] = node =>
+            {
+                while (Patcher.Instance.HasMoreLines())
                 {
+                    var child = PatcherNodeFactory.TryCreate(Patcher.Instance.NextLine());
+
+                    if (child is null)
+                        continue;
+
+                    if (child is PatcherGlobalFunction p_global && p_global.Name == "End")
+                    {
+                        return;
+                    }
+
+                    node.Children.Add(child);
+                }
+                throw new SyntaxErrorException($"Missing @End for @ForEach starting with: {node.Line}");
+            },
+            ["Stop"] = node =>
+            {
+                while (Patcher.Instance.HasMoreLines())
+                {
+                    Patcher.Instance.NextLine();
+                }
+            },
+            ["If"] = node =>
+            {
+                while (Patcher.Instance.HasMoreLines())
+                {
+                    var child = PatcherNodeFactory.TryCreate(Patcher.Instance.NextLine());
+
+                    if (child is null)
+                        continue;
+
+                    if (child is PatcherGlobalFunction p_global && p_global.Name == "End")
+                    {
+                        return;
+                    }
+
+                    node.Children.Add(child);
+                }
+                throw new SyntaxErrorException($"Missing @End for @If starting with: {node.Line}");
+            }
+        };
+        public static readonly Dictionary<string, Action<PatcherGlobalFunction>> globalExecutors = new()
+        {
+            { "Print", node =>
+                {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     CoreUtils.Prompt(getStringFromArgs(args));
                 }
             },
-            { "Debug", args =>
+            { "Debug", node =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     CoreUtils.Print(getStringFromArgs(args));
                 }
             },
-            { "InspectRecord", args =>
+            { "InspectRecord", node =>
                 {
-
+                    List<Expression<object>> args = node.global!.GetArgs();
                     var (names,records) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     string stringid=ExpressionUtils.ExpectString(args[1]);
                     ModRecord? found=records.Find(rec=>rec.StringId==stringid);
@@ -1506,9 +1769,9 @@ namespace KenshiPatcher.ExpressionReader
                     CoreUtils.Print(found.getDataAsString(),0);
                 }
             },
-            { "InspectField", args =>
+            { "InspectField", node =>
                 {
-
+                    List<Expression<object>> args = node.global!.GetArgs();
                     var (names,records) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     string field=ExpressionUtils.ExpectString(args[1]);
                     foreach(var rec in records)
@@ -1517,8 +1780,9 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
             },
-            { "InspectExtraData", args =>
+            { "InspectExtraData", node =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     var (names,records) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     ReverseEngineerRepository RER=ReverseEngineerRepository.Instance;
                     string? category=null;
@@ -1545,19 +1809,18 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
             },
-            { "ShowRecordEvolution", args =>
+            { "ShowRecordEvolution", node =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     string stringid=ExpressionUtils.ExpectString(args[0]);
                     CoreUtils.Print(ReverseEngineerRepository.Instance.GetRecordEvolution(stringid),0);
                 }
             },
-            { "Stop",args=>
-                {
-                    Patcher.Instance.Stop();
-                }
+            { "Stop",node =>{}
             },
-            { "AskConfig",args=>
+            { "AskConfig",node =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     Literal<object> literal=ExpressionUtils.ExpectLiteral(args[0]);
                     string question =ExpressionUtils.ExpectString(args[1]);
 
@@ -1565,34 +1828,43 @@ namespace KenshiPatcher.ExpressionReader
                     configform.AddOption(literal,question);
                 }
             },
-            { "ShowConfig",args=>
+            { "ShowConfig",node =>
                 {
                     KPatcherConfigForm configform=KPatcherConfigForm.Instance;
                     configform.Show();
                 }
             },
-            { "SkipLinesIf",args=>
+            { "If",node=>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     bool condition = ExpressionUtils.ExpectBool(args[0]);
-                    int n=ExpressionUtils.ExpectInt(args[1]);
                     if (condition)
                     {
-                        Patcher.Instance.SkipLines(n);
+                        foreach (PatcherNode child in node.Children)
+                        {
+                            child.Execute();
+                        }
                     }
                 }
             },
-            { "RunLinesIf",args=>
-                {
-                    bool condition = ExpressionUtils.ExpectBool(args[0]);
-                    int n=ExpressionUtils.ExpectInt(args[1]);
-                    if (!condition)
+                { "ForEach",node=> {
+                    List<Expression<object>> args = node.global!.GetArgs();
+                    Array array = ExpressionUtils.ExpectArray(args[0]);
+                    string variableName = ExpressionUtils.ExpectString(args[1]);
+                    foreach (object item in array)
                     {
-                        Patcher.Instance.SkipLines(n);
+                        Patcher.Instance.TrySetValue(variableName, new Literal<object>(item));
+                        foreach (PatcherNode child in node.Children)
+                        {
+                            child.Execute();
+                        }
                     }
                 }
+            },{ "End",node=> { }
             },
-            { "ApplyCurrentPatch", (args) =>
+            { "ApplyCurrentPatch", (node) =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     ReverseEngineer current=Patcher.Instance.currentRE!;
                     foreach(ModRecord record in sources) {
@@ -1603,8 +1875,9 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
             },
-            { "PropagateExtraDataByField", (args) =>
+            { "PropagateExtraDataByField", (node) =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     string field = ExpressionUtils.ExpectString(args[1]);
                     string category = ExpressionUtils.ExpectString(args[2]);
@@ -1660,8 +1933,9 @@ namespace KenshiPatcher.ExpressionReader
                     Patcher.Instance.currentRE!.addDependencies(modnames.Where(m => !string.Equals(m, Patcher.Instance.currentRE!.modname, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
                 }
             },
-                { "ExpandExtraDataByField", (args) =>
+                { "ExpandExtraDataByField", (node) =>
                 {
+                    List<Expression<object>> args = node.global!.GetArgs();
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     string field = ExpressionUtils.ExpectString(args[1]);
                     string category = ExpressionUtils.ExpectString(args[2]);
@@ -1751,6 +2025,19 @@ namespace KenshiPatcher.ExpressionReader
                     }
                 }
             },
+                { "SetRangeToField",node=>
+                {
+                    List<Expression<object>> args = node.global!.GetArgs();
+                    var (modNames, records) =ExpressionUtils.ExpectGroupRecord(args[0]);
+                    string field = ExpressionUtils.ExpectString(args[1]);
+                    int start = ExpressionUtils.ExpectInt(args[2]);
+                    int step = args.Count >= 4 ? ExpressionUtils.ExpectInt(args[3]) : 1;
+                    for (int i = 0; i < records.Count; i++)
+                    {
+                        records[i].SetField(field,""+(start + i * step));
+                    }
+                }
+            },
         };
         private static string getStringFromArgs(List<Expression<object>> args)
             {
@@ -1766,11 +2053,11 @@ namespace KenshiPatcher.ExpressionReader
                 this.name = name;
                 this.args = args;
             }
+        public List<Expression<object>> GetArgs() => args;
             public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null)
             {
-                if (!globalFuncs.TryGetValue(name, out var func))
-                    throw new Exception($"Unknown global function '{name}'");
-                func(args);
+                if (!globalExecutors.TryGetValue(name, out var func)) throw new Exception($"Unknown global function '{name}'");
+                //func(args);
                 return true;
             }
 

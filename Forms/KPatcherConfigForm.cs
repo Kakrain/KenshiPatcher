@@ -1,6 +1,7 @@
 ﻿using KenshiCore.ReverseEngineering;
 using KenshiCore.Utilities;
 using KenshiPatcher.ExpressionReader;
+using KenshiPatcher.PatchModel;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -270,7 +271,8 @@ namespace KenshiPatcher.Forms
             }
             else
             {
-                Patcher.Instance.Stop("User cancelled configuration of patch");
+                throw new OperationCanceledException("User cancelled configuration of patch");
+                //Patcher.Instance.Stop("User cancelled configuration of patch");
             }
 
             _options.Clear();
