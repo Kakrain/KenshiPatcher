@@ -152,7 +152,7 @@ namespace KenshiPatcher.Forms
 
         protected override async Task AfterModsLoadedAsync()
         {
-            await Task.Run(() => RERepository.LoadFromMods( mergedMods));//,CoreUtils.GetRealModPath
+            await Task.Run(() => RERepository.LoadFromMods( mergedMods));
 
             KPatcher = Patcher.Instance;
         }

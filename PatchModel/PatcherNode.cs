@@ -263,6 +263,11 @@ namespace KenshiPatcher.PatchModel
             if (GlobalFunctionExpression.globalParsers.TryGetValue(Name, out var parser))
             {
                 parser(this);
+                return;
+            }
+            if(!GlobalFunctionExpression.globalExecutors.ContainsKey(Name))
+            {
+                throw new FormatException($"Unknown global function: {Name}");
             }
         }
         private static string ExtractFunctionName(string line)

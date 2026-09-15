@@ -33,17 +33,28 @@ namespace KenshiPatcher.PatchModel
         public static PatcherNode? TryCreate(string line)
         {
             string cleanedLine = CleanLine(line);
+            //CoreUtils.Print("Test line:" + cleanedLine);
+            //CoreUtils.Prompt("Test line:" + cleanedLine);
             if (string.IsNullOrWhiteSpace(cleanedLine))
                 return null;
             foreach (var kvp in contain_constructors)
             {
                 if (cleanedLine.Contains(kvp.Key, StringComparison.Ordinal))
+                {
+
+                    ///CoreUtils.Print("Test line:" + cleanedLine+ "is "+ kvp.Value(cleanedLine));
                     return kvp.Value(cleanedLine);
+
+                }
             }
             foreach (var kvp in startswith_constructors)
             {
                 if (cleanedLine.StartsWith(kvp.Key, StringComparison.Ordinal))
+                {
+                    //CoreUtils.Print("Test line:" + cleanedLine + "is " + kvp.Value(cleanedLine));
                     return kvp.Value(cleanedLine);
+
+                }
             }
             throw new FormatException($"Unrecognized line: ({line})");
         }
