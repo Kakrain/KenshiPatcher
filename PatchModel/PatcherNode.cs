@@ -239,11 +239,9 @@ namespace KenshiPatcher.PatchModel
     }
     public class PatcherProcedure : PatcherNode
     {
-        //private string line = "";
         public PatcherProcedure(string line) : base(line){}
         public override void Parse()
         {
-            //this.line = line;
         }
         public override void Execute()
         {
@@ -252,14 +250,12 @@ namespace KenshiPatcher.PatchModel
     }
     public class PatcherGlobalFunction : PatcherNode
     {
-        //public string Line { get; }
         public string Name => ExtractFunctionName(Line); //{ get; }
         public GlobalFunctionExpression? global;
         public List<PatcherNode> Children { get; } = new();
         public PatcherGlobalFunction(string line) : base(line) { }
         public override void Parse()
         {
-            //this.Name = ExtractFunctionName(Line);
             if (GlobalFunctionExpression.globalParsers.TryGetValue(Name, out var parser))
             {
                 parser(this);

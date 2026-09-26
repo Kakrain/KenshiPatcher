@@ -174,7 +174,7 @@ namespace KenshiPatcher.Forms
                 return;
                 //re.LoadModFile(path);
             }
-            string headerText = re.GetHeaderAsString();
+            string headerText = CoreUtils.GetFormatter().GetHeaderAsString(re.modData);
             // Always run UI updates on the UI thread
             string? patchLog =GetFileAsText(Path.ChangeExtension(modPath, null) + "_patch.log");
             void UpdateUi()

@@ -947,7 +947,7 @@ namespace KenshiPatcher.ExpressionReader
                     if (args.Count != 1)
                         throw new Exception("FieldExist expects exactly one argument");
                     string field = ExpressionUtils.ExpectString(args[0],r,locals);
-                    return r.HasField(field) && !string.IsNullOrEmpty(r.GetFieldAsString(field));
+                    return r.HasField(field); //&& !string.IsNullOrEmpty(r.GetFieldAsString(field));
 
                 }
             },
@@ -1009,7 +1009,7 @@ namespace KenshiPatcher.ExpressionReader
             { "isRemoved", (r,locals, args) =>
                 {
                     string field = "REMOVED";
-                    return !string.IsNullOrEmpty(field) && r.HasField(field) && r.BoolFields[field];
+                    return !string.IsNullOrEmpty(field) && r.HasField(field) && r.BoolFields!=null && r.BoolFields[field];
                 }
             },
             {
@@ -1097,7 +1097,15 @@ namespace KenshiPatcher.ExpressionReader
 
                         return Detect(r);
                     }
-            }
+            },
+                {
+                "isIn", (r,locals, args) =>
+                    {
+                        var (modnames, sources) = ExpressionUtils.ExpectGroupRecord(args[0],r,locals);
+                        return sources.Any(rec=>rec.StringId == r.StringId);
+                    }
+                }
+
             };
         private readonly List<Expression<object>> arguments;
         private static bool IsAnyChildUntil(
@@ -1766,7 +1774,7 @@ namespace KenshiPatcher.ExpressionReader
                     ModRecord? found=records.Find(rec=>rec.StringId==stringid);
                     if(found == null)
                         throw new Exception($"mod with stringId '{stringid}' not found");
-                    CoreUtils.Print(found.getDataAsString(),0);
+                    CoreUtils.Print(CoreUtils.GetFormatter().getDataAsString(found),0);
                 }
             },
             { "InspectField", node =>
@@ -1813,7 +1821,11 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     List<Expression<object>> args = node.global!.GetArgs();
                     string stringid=ExpressionUtils.ExpectString(args[0]);
-                    CoreUtils.Print(ReverseEngineerRepository.Instance.GetRecordEvolution(stringid),0);
+                    string? field=null;
+                    if(args.Count>1)
+                        field=ExpressionUtils.ExpectString(args[1]);
+                    CoreUtils.Print(ReverseEngineerRepository.Instance.GetRecordEvolution(stringid,field),0);
+
                 }
             },
             { "Stop",node =>{}
@@ -1868,7 +1880,7 @@ namespace KenshiPatcher.ExpressionReader
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                     ReverseEngineer current=Patcher.Instance.currentRE!;
                     foreach(ModRecord record in sources) {
-                        ModRecord? current_record =current.searchModRecordByStringId(record.StringId);
+                        ModRecord? current_record =current.modData.GetRecordByStringId(record.StringId);
                         if(current_record != null) {
                             record.applyChangesFrom(current_record);
                         }

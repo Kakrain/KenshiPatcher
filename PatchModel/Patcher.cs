@@ -11,6 +11,7 @@ namespace KenshiPatcher.PatchModel
 {
     public sealed class Patcher
     {
+        private const string firstMod = "gamedata.base";
         private static Patcher? _instance;
         public static Patcher Instance
         {
@@ -20,7 +21,6 @@ namespace KenshiPatcher.PatchModel
                 {
                     _instance = new Patcher();
                 }
-                    //throw new InvalidOperationException("Patcher instance has not been initialized.");
                 return _instance;
             }
         }
@@ -82,6 +82,7 @@ namespace KenshiPatcher.PatchModel
                 {
                     node.Execute();
                 }
+                
                 savePatchedMod(path);
                 ReverseEngineerRepository.Instance.ReloadMod(path);
                 return true;
@@ -198,30 +199,31 @@ namespace KenshiPatcher.PatchModel
         {
             return ReverseEngineerRepository.Instance.ParseModSelector(selector,currentPatchName);
         }
-        private (string mode, string recordType, string condition) ParseRecordDefinition(string def)
+        private (string mode, string recordType, string condition, bool makeWhole) ParseRecordDefinition(string def)
         {
-            //var match = Regex.Match(def, @"^([AE]):([A-Z_]+)\|(.+)$");
-            var match = Regex.Match(def, @"^([AE]|\d+):([A-Z_]+)\|(.+)$");
+            //var match = Regex.Match(def, @"^([AE]|\d+):([A-Z_]+)\|(.+)$");
+            var match = Regex.Match(def, @"^([AE]|\d+):([A-Z_]+)(\+)?\|(.+)$");
             if (!match.Success)
                 throw new FormatException($"Invalid record definition: ({def})");
 
             string mode = match.Groups[1].Value;
             string recordType = match.Groups[2].Value;
-            string condition = match.Groups[3].Value.Trim();
+            bool makeWhole = match.Groups[3].Success;
+            string condition = match.Groups[4].Value.Trim();
 
-            return (mode, recordType, condition);
+            return (mode, recordType, condition, makeWhole);
         }
         public (List<string>, List<ModRecord>) GetGroup(string text)
         {
             var modSelector = ExtractRequiredParentheses(ref text, "mod selector");
             var definition = ExtractRequiredParentheses(ref text, "record definition");
 
-            var (mode, recordType, condition) = ParseRecordDefinition(definition);
+            var (mode, recordType, condition, makeWhole) = ParseRecordDefinition(definition);
             List<ReverseEngineer> mods = ParseModSelector(modSelector, this.modname);
 
             var predicate = BuildRecordPredicate(condition);
             var collected = CollectRecords(mods, recordType);
-            (List<string> modNames, List<ModRecord> mergedRecords) = MergeRecords(collected);
+            (List<string> modNames, List<ModRecord> mergedRecords) = MergeRecords(collected, makeWhole);
             ( modNames, mergedRecords) =ReverseEngineerRepository.FilterRemovedRecords(modNames, mergedRecords);
             return FilterRecordsByPredicate(modNames, mergedRecords, predicate, mode);
         }
@@ -242,12 +244,13 @@ namespace KenshiPatcher.PatchModel
             var cond = parser.ParseValueExpression();
             return r => (bool)cond(r,null!);
         }
+
         private IEnumerable<(ModRecord record, string modName)> CollectRecords(IEnumerable<ReverseEngineer> mods, string recordType)
         {
             foreach (var re in mods)
             {
                 string modName = re.modname;
-                foreach (var record in re.GetRecordsByTypeINMUTABLE(recordType))
+                foreach (var record in re.modData.GetRecordsByType(recordType))
                     yield return (record, modName);
             }
         }
@@ -285,11 +288,11 @@ namespace KenshiPatcher.PatchModel
             progress.Finish();
             return (finalNames, finalRecords);
         }
-        private (List<string> modNames, List<ModRecord> records) MergeRecords(IEnumerable<(ModRecord record, string sourceModName)> records)
+        private (List<string> modNames, List<ModRecord> records) MergeRecords(IEnumerable<(ModRecord record, string sourceModName)> records, bool MakeWhole=false)
         {
             var resultModNames = new List<string>();
             var resultRecords = new List<ModRecord>();
-
+            ModTemplate mtemplate = CoreUtils.GetTemplate();    
             var grouped = records.GroupBy(x => x.record.StringId).ToList();
 
             ProgressController progress = ProgressController.Instance;
@@ -308,12 +311,15 @@ namespace KenshiPatcher.PatchModel
                         break;
                     }
                 }
+                ModRecord? merged = null;
+                string creatorMod = firstMod;
+
                 if (creatorIndex >= 0)
                 {
                     var creatorPair = recList[creatorIndex];
 
-                    var merged = creatorPair.record.deepClone();
-                    var creatorMod = creatorPair.sourceModName;
+                    merged = creatorPair.record.deepClone();
+                    creatorMod = creatorPair.sourceModName;
 
                     // Apply only changes that happen after the creator.
                     for (int j = creatorIndex + 1; j < recList.Count; j++)
@@ -321,13 +327,32 @@ namespace KenshiPatcher.PatchModel
                         merged.applyChangesFrom(recList[j].record);
                     }
 
-                    resultRecords.Add(merged);
-                    resultModNames.Add(creatorMod);
                 }
                 else
                 {
-                    CoreUtils.Print($"not found new record of:{recList[0].record.StringId}");
+                    //CoreUtils.Print($"not found new record of:{recList[0].record.StringId}");
+                    if (MakeWhole)
+                    {
+                        for (int j = 0; j < recList.Count; j++)
+                        {
+                            if (merged == null)
+                            {
+                                merged = recList[j].record.deepClone();
+                            }
+                            else
+                            {
+                                merged.applyChangesFrom(recList[j].record);
+                            }
+                        }
+                    }
+                    merged = merged==null?null:mtemplate.GetWhole(merged, currentRE!.modData.Header!.FileType);
                 }
+                if (merged != null)
+                {
+                    resultRecords.Add(merged);
+                    resultModNames.Add(creatorMod);
+                }
+
                 i++;
                 progress.Report(i, $"Merging records {i}/{grouped.Count}");
             }
@@ -348,8 +373,7 @@ namespace KenshiPatcher.PatchModel
 
             if (!getEarly)
             {
-                var localPatch = Patcher.Instance.currentRE!
-                    .searchModRecordByStringIdLocally(id);
+                var localPatch = Patcher.Instance.currentRE!.modData.GetRecordByStringId(id);
 
                 if (localPatch != null)
                 {
