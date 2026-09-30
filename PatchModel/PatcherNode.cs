@@ -36,8 +36,10 @@ namespace KenshiPatcher.PatchModel
     }
     public class PatcherDefinition : PatcherNode
     {
+        private char _forceAllModsChar = '§';
         private string left = "";
         private string right = "";
+        private bool forceAllMods = false;
         public PatcherDefinition(string line) : base(line){}
         public override void Parse()
         {
@@ -47,10 +49,18 @@ namespace KenshiPatcher.PatchModel
 
             left = def[0].Trim();
             right = def[1].Trim();
+            if (left.StartsWith(_forceAllModsChar))
+            {
+                forceAllMods = true;
+                left = left[1..].Trim();
+            }
         }
         public override void Execute()
         {
+            Patcher.Instance.ForceAllMods = forceAllMods;
             TrySetValue(left, ParseExpression(right));
+            Patcher.Instance.ForceAllMods = false;
+            //TrySetValue(left, ParseExpression(right));
         }
         public void TrySetValue(string left, Expression<object> expr)
         {

@@ -14,6 +14,7 @@ using System.Linq;
 using System.Security.Cryptography.Xml;
 using System.Security.Policy;
 using System.Text;
+using KenshiPatcher.Meta;
 
 namespace KenshiPatcher.Forms
 {
@@ -36,9 +37,15 @@ namespace KenshiPatcher.Forms
                 });
             ReverseEngineerRepository.Instance.ignoreKenshiFixer = false;
             AddColumn("Patch Status", mod => getPatchStatus(mod),150);
+
+            AddToggle("Also save Update Delta", "update_delta");
+
             AddButton("Patch it!", PatchItClick);
             AddButton("Reset Patch", ResetPatchClick);
+            AddButton("Update Patch", UpdateItClick);
+            AddButton("Update All", ResetPatchClick);
             modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
+            KPatcherConfigForm.Initialize();
         }
 
         protected override void LoadMods()
@@ -66,10 +73,23 @@ namespace KenshiPatcher.Forms
                 return "_";
             return (File.Exists(unpatchedPath) ? "patched already" : "not patched");
         }
-        private async void PatchItClick(object? sender, EventArgs e)
+        private void PatchItClick(object? sender, EventArgs e)
         {
-            var mods = getSelectedMods().Where(m => File.Exists(m.getPatchPath())).ToList();
-
+            if (!UiService.ShowYesNoQuestion("Unless you are planning on importing or a new save, consider Updating instead.","are you sure?"))
+                return;
+            Patch(getSelectedMods(), false);
+        }
+        private void UpdateItClick(object? sender, EventArgs e)
+        {
+            Patch(getSelectedMods(),true);
+        }
+        private void UpdateAll(object? sender, EventArgs e)
+        {
+            Patch(ModRepository.Instance.GetMergedMods().Values.ToList(), true);
+        }
+        private async void Patch(List<ModItem> allmods,bool isUpdate)
+        {
+            var mods = allmods.Where(m => File.Exists(m.getPatchPath())).ToList();
             if (mods.Count == 0)
             {
                 UiService.ShowMessage("No mod available for patching selected", "Error", MessageBoxIcon.Error);
@@ -80,7 +100,7 @@ namespace KenshiPatcher.Forms
             var sw = Stopwatch.StartNew();
             foreach (var mod in mods)
             {
-                bool success = await KPatcher!.RunPatchAsync(mod.GetPatchTargetPath()!);
+                bool success = await KPatcher!.RunPatchAsync(mod.GetPatchTargetPath()!, isUpdate);
 
                 if (!success)
                     failedMods.Add(mod.Name);
@@ -103,12 +123,14 @@ namespace KenshiPatcher.Forms
             var logForm = getLogForm();
             logForm.Reset();
 
-            RefreshColumn(1);
+            RefreshColumn(2);
             modsListView.Refresh();
             RefreshSelectedModInfo();
         }
         private void ResetPatchClick(object? sender, EventArgs e)
         {
+            if (!UiService.ShowYesNoQuestion("Are you sure you want to Reset this patch?.", "are you sure?"))
+                return;
             var mods = getSelectedMods()
                 .Where(m => File.Exists(m.getPatchPath()))
                 .ToList();
@@ -130,7 +152,7 @@ namespace KenshiPatcher.Forms
 
                 string unpatchedPath = Path.Combine(dir, modName + ".unpatched");
                 string logPath = Path.Combine(dir, modName + "_patch.log");
-
+                string metapath = Path.Combine(dir, modName + ".meta");
                 if (!File.Exists(unpatchedPath))
                 {
                     //UiService.ShowMessage( $"No backup found for {modName}.mod","Error", MessageBoxIcon.Error);
@@ -143,22 +165,24 @@ namespace KenshiPatcher.Forms
 
                 if (File.Exists(logPath))
                     File.Delete(logPath);
+                if (File.Exists(metapath))
+                    File.Delete(metapath);
             }
 
-            RefreshColumn(1);
+            RefreshColumn(2);
             modsListView.Refresh();
             RefreshSelectedModInfo();
         }
 
         protected override async Task AfterModsLoadedAsync()
         {
+            await Task.Run(() => MetaInfo.LoadFromMods(mergedMods));
             await Task.Run(() => RERepository.LoadFromMods( mergedMods));
-
             KPatcher = Patcher.Instance;
         }
         private void ShowModInfo(ModItem mod)
         {
-            ReverseEngineer re = new ReverseEngineer();
+            ReverseEngineer re = new ReverseEngineer(mod.Name);
             string modPath = mod.getModFilePath()!;
             var logform = getLogForm();
             if ((logform == null)|| (modPath == null)) return;
@@ -202,13 +226,6 @@ namespace KenshiPatcher.Forms
                 ShowModInfo(mod);
             }
         }
-        /*private string? GetFileAsText(string filePath)
-        {
-            string? result= null;
-            if(File.Exists(filePath))
-                result= File.ReadAllText(filePath);
-            return result;
-        }*/
         private string? GetFileAsText(string filePath)
         {
             if (!File.Exists(filePath))
@@ -230,7 +247,7 @@ namespace KenshiPatcher.Forms
         }
         private string BuildMissingDependenciesList(ReverseEngineer re)
         {
-            var missing = re.getDependencies()
+            var missing = re.getDependenciesAsList()
                 .Where(item => !mergedMods.ContainsKey(item))
                 .ToList();
 
@@ -238,7 +255,7 @@ namespace KenshiPatcher.Forms
         }
         private string BuildMissingReferencesList(ReverseEngineer re)
         {
-            var missing = re.getReferences()
+            var missing = re.getReferencesAsList()
                 .Where(item => !mergedMods.ContainsKey(item))
                 .ToList();
 

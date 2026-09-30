@@ -137,15 +137,29 @@ namespace KenshiPatcher.Forms
         private Dictionary<string, Control> controls = new();
         private static KPatcherConfigForm? _instance;
         private readonly List<OptionDefinition> _options = new();
-        public static KPatcherConfigForm Instance
+        /*public static KPatcherConfigForm Instance
         {
             get
             {
                 if (_instance == null) _instance = new KPatcherConfigForm();
                 return _instance;
-
-
             }
+        }*/
+        public static KPatcherConfigForm Instance
+        {
+            get
+            {
+                if (_instance == null)
+                    throw new InvalidOperationException(
+                        "KPatcherConfigForm has not been initialized on the UI thread.");
+                return _instance;
+            }
+        }
+        public static void Initialize()
+        {
+            if (_instance != null)
+                return;
+            _instance ??= new KPatcherConfigForm();
         }
 
         private KPatcherConfigForm()
@@ -230,25 +244,6 @@ namespace KenshiPatcher.Forms
                 panel.Controls.Add(option.Build());
             }
         }
-        /*public new void Show()
-        {
-            BuildUI();
-            this.BringToFront();
-            this.Activate();
-            var result = ShowDialog();
-            if (result == DialogResult.OK)
-            {
-                foreach (var option in _options)
-                {
-                    option.Read();
-                }
-            }
-            else
-            {
-                Patcher.Instance.Stop("User cancelled configuration of patch");
-            }
-            _options.Clear();
-        }*/
 
         public new void Show()
         {
@@ -257,25 +252,31 @@ namespace KenshiPatcher.Forms
                 Invoke(new Action(() => Show()));
                 return;
             }
-
-            BuildUI();
-            BringToFront();
-            Activate();
-
-            var result = ShowDialog();
-
-            if (result == DialogResult.OK)
+            try
             {
-                foreach (var option in _options)
-                    option.Read();
-            }
-            else
-            {
-                throw new OperationCanceledException("User cancelled configuration of patch");
-                //Patcher.Instance.Stop("User cancelled configuration of patch");
-            }
+                BuildUI();
+                BringToFront();
+                Activate();
 
-            _options.Clear();
+                var result = ShowDialog();
+
+                if (result == DialogResult.OK)
+                {
+                    foreach (var option in _options)
+                        option.Read();
+                }
+                else
+                {
+                    throw new OperationCanceledException("User cancelled configuration of patch");
+                    //Patcher.Instance.Stop("User cancelled configuration of patch");
+                }
+            }
+            finally
+            {
+                panel.Controls.Clear();
+                _options.Clear();
+            }
+            
         }
     }
 }

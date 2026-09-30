@@ -1618,8 +1618,7 @@ namespace KenshiPatcher.ExpressionReader
                         }
                     }
                     progress.Finish($"{procedureName} done");
-                    Patcher.Instance.currentRE!.addReferences(modnames
-                    .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
+                    Patcher.Instance.currentRE!.addReferences(modnames.Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
                 }
                 else
                 {
@@ -1632,8 +1631,7 @@ namespace KenshiPatcher.ExpressionReader
                         progress.Report(i, $"running {procedureName} to record {i}");
                     }
                 }
-                Patcher.Instance.currentRE!.addDependencies(leftNames
-                        .Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
+                Patcher.Instance.currentRE!.addDependencies(leftNames.Where(m => !string.Equals(m, currentMod, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
                 return tg;
             };
         }
@@ -1844,6 +1842,7 @@ namespace KenshiPatcher.ExpressionReader
                 {
                     KPatcherConfigForm configform=KPatcherConfigForm.Instance;
                     configform.Show();
+                    
                 }
             },
             { "If",node=>

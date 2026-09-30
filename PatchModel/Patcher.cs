@@ -7,6 +7,7 @@ using KenshiCore.Mods;
 using KenshiCore.ReverseEngineering;
 using KenshiCore.Utilities;
 using KenshiPatcher.Forms;
+using KenshiPatcher.Meta;
 namespace KenshiPatcher.PatchModel
 {
     public sealed class Patcher
@@ -29,7 +30,10 @@ namespace KenshiPatcher.PatchModel
         private Queue<string> linesToProcess;
         private List<PatcherNode> nodes;
         public ReverseEngineer? currentRE;
+        private MetaReader metareader = new MetaReader();
         private string modname = "";
+        private List<string>? modsToPatch = null;//means patch all mods.
+        public bool ForceAllMods = false;
         public string NextLine()
         {
             if (linesToProcess.Count == 0)
@@ -42,6 +46,7 @@ namespace KenshiPatcher.PatchModel
         }
         private Patcher()
         {
+            modsToPatch = null;
             definitions = new();
             tables = new();
             nodes = new();
@@ -51,6 +56,7 @@ namespace KenshiPatcher.PatchModel
         }
         public void Reset()
         {
+            modsToPatch = null;
             linesToProcess = new();
             nodes.Clear();
             definitions.Clear();
@@ -58,11 +64,12 @@ namespace KenshiPatcher.PatchModel
             currentRE = null;
             //_resolveGlobalCache.Clear(); // Do not clear the global cache on reset; it should persist across patch runs.
         }
-        public async Task<bool> RunPatchAsync(string path)
+        public async Task<bool> RunPatchAsync(string path, bool isUpdate)
         {
-            return await Task.Run(() => runPatch(path));
+            return await Task.Run(() => runPatch(path, isUpdate));
         }
-        public bool runPatch(string path)
+        
+        public bool runPatch(string path,bool isUpdate)
         {
             Reset();
             loadUnPatchedMod(path);
@@ -74,6 +81,20 @@ namespace KenshiPatcher.PatchModel
             this.modname = modName+".mod";
             string patchPath = Path.Combine(dir, modName + ".patch");
             linesToProcess = new Queue<string>(File.ReadAllLines(patchPath));
+
+            MetaFile currentMFile = MetaFile.getMetaFileUntil(modname);
+
+            string metapath = Path.Combine(dir, modName + ".meta");
+            if (isUpdate&&metareader.Read(metapath) && metareader.mfile!=null)
+            {
+                modsToPatch = MetaFile.GetModsToBePatched(metareader.mfile,currentMFile);
+                if (modsToPatch.Count == 1)
+                {
+                    return true;
+                }
+            }
+
+
             CoreUtils.StartLog(modName, dir);
             try
             {
@@ -82,7 +103,20 @@ namespace KenshiPatcher.PatchModel
                 {
                     node.Execute();
                 }
-                
+                new MetaWriter().WriteMetaFile(metapath, currentMFile);
+                if (isUpdate && modsToPatch != null)
+                {
+                    if (CoreUtils.toggles["update_delta"])
+                    {
+                        savePatchedMod(Path.Combine(dir, modName + "_delta.mod"));
+                    }
+                    ReverseEngineer? existingPatch =ReverseEngineerRepository.Instance.LoadMod(path);
+                    if(existingPatch != null)
+                    {
+                        existingPatch.MergeReverseEngineer(currentRE!);
+                        currentRE = existingPatch;
+                    }
+                }
                 savePatchedMod(path);
                 ReverseEngineerRepository.Instance.ReloadMod(path);
                 return true;
@@ -182,7 +216,7 @@ namespace KenshiPatcher.PatchModel
 
             if (!File.Exists(patchPath))
                 File.Copy(path, patchPath, overwrite: true);
-            currentRE = new ReverseEngineer();
+            currentRE = new ReverseEngineer(modName+".mod");
             currentRE.LoadModFile(patchPath);
         }
         private void savePatchedMod(string path)
@@ -220,7 +254,10 @@ namespace KenshiPatcher.PatchModel
 
             var (mode, recordType, condition, makeWhole) = ParseRecordDefinition(definition);
             List<ReverseEngineer> mods = ParseModSelector(modSelector, this.modname);
-
+            if (modsToPatch!= null && !ForceAllMods)
+            {
+                mods = mods.Where(r => modsToPatch!.Contains(r.modname)).ToList();
+            }
             var predicate = BuildRecordPredicate(condition);
             var collected = CollectRecords(mods, recordType);
             (List<string> modNames, List<ModRecord> mergedRecords) = MergeRecords(collected, makeWhole);
