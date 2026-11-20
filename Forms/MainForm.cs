@@ -20,7 +20,6 @@ namespace KenshiPatcher.Forms
 {
     public class MainForm : ProtoMainForm
     {
-        private Boolean IndexChangeEnabled = true;
         ReverseEngineerRepository RERepository = ReverseEngineerRepository.Instance;
         private Patcher? KPatcher;
         public MainForm()
@@ -43,9 +42,10 @@ namespace KenshiPatcher.Forms
             AddButton("Patch it!", PatchItClick);
             AddButton("Reset Patch", ResetPatchClick);
             AddButton("Update Patch", UpdateItClick);
-            AddButton("Update All", ResetPatchClick);
-            modsListView.SelectedIndexChanged += Mainform_SelectedIndexChanged;
+            AddButton("Update All", UpdateAll);
             KPatcherConfigForm.Initialize();
+            //should always run
+            AddShowAction(_ => RefreshSelectedModInfo());
         }
 
         protected override void LoadMods()
@@ -124,7 +124,6 @@ namespace KenshiPatcher.Forms
             logForm.Reset();
 
             RefreshColumn(2);
-            modsListView.Refresh();
             RefreshSelectedModInfo();
         }
         private void ResetPatchClick(object? sender, EventArgs e)
@@ -162,7 +161,7 @@ namespace KenshiPatcher.Forms
                 File.Copy(unpatchedPath, modPath, overwrite: true);
 
                 File.Delete(unpatchedPath);
-
+                CoreUtils.EndLog();
                 if (File.Exists(logPath))
                     File.Delete(logPath);
                 if (File.Exists(metapath))
@@ -170,7 +169,6 @@ namespace KenshiPatcher.Forms
             }
 
             RefreshColumn(2);
-            modsListView.Refresh();
             RefreshSelectedModInfo();
         }
 
@@ -200,7 +198,7 @@ namespace KenshiPatcher.Forms
             }
             string headerText = CoreUtils.GetFormatter().GetHeaderAsString(re.modData);
             // Always run UI updates on the UI thread
-            string? patchLog =GetFileAsText(Path.ChangeExtension(modPath, null) + "_patch.log");
+            string? patchLog =CoreUtils.GetFileAsText(Path.ChangeExtension(modPath, null) + "_patch.log");
             void UpdateUi()
             {
                 logform.LogString(headerText);
@@ -226,25 +224,6 @@ namespace KenshiPatcher.Forms
                 ShowModInfo(mod);
             }
         }
-        private string? GetFileAsText(string filePath)
-        {
-            if (!File.Exists(filePath))
-                return null;
-
-            for (int i = 0; i < 5; i++)
-            {
-                try
-                {
-                    return File.ReadAllText(filePath);
-                }
-                catch (IOException)
-                {
-                    Thread.Sleep(50); // wait for writer to finish
-                }
-            }
-
-            return "file is busy";
-        }
         private string BuildMissingDependenciesList(ReverseEngineer re)
         {
             var missing = re.getDependenciesAsList()
@@ -260,27 +239,6 @@ namespace KenshiPatcher.Forms
                 .ToList();
 
             return $"not found References : {(missing.Count == 0 ? "none" : string.Join("|", missing))}\n";
-        }
-        private void Mainform_SelectedIndexChanged(object? sender, EventArgs? e)
-        {
-            var mods = getSelectedMods();
-            if (mods.Count==0|| !IndexChangeEnabled)
-                return;
-            modsListView.BeginUpdate();
-            try
-            {
-                foreach (var mod in mods)
-                {
-                    if (mod == null)
-                        continue;
-                    BeginInvoke(new Action(() => ShowModInfo(mod)));
-                }
-            }
-            finally
-            {
-                modsListView.EndUpdate();
-                modsListView.Refresh();
-            }
         }
     }
 }

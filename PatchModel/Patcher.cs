@@ -1,13 +1,14 @@
-﻿using KenshiPatcher.ExpressionReader;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Diagnostics;
-using KenshiCore.UI;
-using KenshiCore.Mods;
+﻿using KenshiCore.Mods;
 using KenshiCore.ReverseEngineering;
+using KenshiCore.UI;
 using KenshiCore.Utilities;
+using KenshiPatcher.ExpressionReader;
 using KenshiPatcher.Forms;
 using KenshiPatcher.Meta;
+using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
+using static System.Net.Mime.MediaTypeNames;
 namespace KenshiPatcher.PatchModel
 {
     public sealed class Patcher
@@ -31,9 +32,10 @@ namespace KenshiPatcher.PatchModel
         private List<PatcherNode> nodes;
         public ReverseEngineer? currentRE;
         private MetaReader metareader = new MetaReader();
+        private ReverseEngineer? existingPatch = null;
         private string modname = "";
         private List<string>? modsToPatch = null;//means patch all mods.
-        public bool ForceAllMods = false;
+        public bool RestrictToPatchMods = false;
         public string NextLine()
         {
             if (linesToProcess.Count == 0)
@@ -66,59 +68,33 @@ namespace KenshiPatcher.PatchModel
         }
         public async Task<bool> RunPatchAsync(string path, bool isUpdate)
         {
-            return await Task.Run(() => runPatch(path, isUpdate));
+            return await Task.Run(() =>isUpdate&&CanUpdate(path)? RunUpdate(path): RunFresh(path));
         }
-        
-        public bool runPatch(string path,bool isUpdate)
+
+        private bool CanUpdate(string path)
         {
-            Reset();
-            loadUnPatchedMod(path);
-
-            ReverseEngineerRepository.Instance.ReloadMod(path,true);
-
             string dir = Path.GetDirectoryName(path)!;
             string modName = Path.GetFileNameWithoutExtension(path);
-            this.modname = modName+".mod";
-            string patchPath = Path.Combine(dir, modName + ".patch");
-            linesToProcess = new Queue<string>(File.ReadAllLines(patchPath));
 
-            MetaFile currentMFile = MetaFile.getMetaFileUntil(modname);
+            string unpatchedPath =Path.Combine(dir, modName + ".unpatched");
 
-            string metapath = Path.Combine(dir, modName + ".meta");
-            if (isUpdate&&metareader.Read(metapath) && metareader.mfile!=null)
-            {
-                modsToPatch = MetaFile.GetModsToBePatched(metareader.mfile,currentMFile);
-                if (modsToPatch.Count == 1)
-                {
-                    return true;
-                }
-            }
+            string metaPath =Path.Combine(dir, modName + ".meta");
 
+            return File.Exists(unpatchedPath)&& File.Exists(metaPath);
+        }
 
-            CoreUtils.StartLog(modName, dir);
+        private bool RunFresh(string path)
+        {
             try
             {
+                PreparePatch(path);
+
+                ReverseEngineerRepository.Instance.ReloadMod(path, true);
                 ProcessPatchLines();
-                foreach (PatcherNode node in nodes)
-                {
-                    node.Execute();
-                }
-                new MetaWriter().WriteMetaFile(metapath, currentMFile);
-                if (isUpdate && modsToPatch != null)
-                {
-                    if (CoreUtils.toggles["update_delta"])
-                    {
-                        savePatchedMod(Path.Combine(dir, modName + "_delta.mod"));
-                    }
-                    ReverseEngineer? existingPatch =ReverseEngineerRepository.Instance.LoadMod(path);
-                    if(existingPatch != null)
-                    {
-                        existingPatch.MergeReverseEngineer(currentRE!);
-                        currentRE = existingPatch;
-                    }
-                }
-                savePatchedMod(path);
-                ReverseEngineerRepository.Instance.ReloadMod(path);
+                ExecuteNodes();
+
+                SaveFreshResult(path);
+
                 return true;
             }
             catch (Exception ex)
@@ -126,11 +102,115 @@ namespace KenshiPatcher.PatchModel
                 HandlePatchError(ex);
                 return false;
             }
-            finally
+        }
+
+        private bool RunUpdate(string path)
+        {
+            try
             {
-                CoreUtils.EndLog("Patch execution summary saved.");
+                PreparePatch(path);
+
+                ReverseEngineer initial = ReverseEngineerRepository.Instance.LoadMod(Path.ChangeExtension(path, ".unpatched"))!;
+
+                initial.MergeReverseEngineer(ReverseEngineerRepository.Instance.LoadMod(path)!);
+
+                ReverseEngineerRepository.Instance.SetMod(initial, Path.GetFileName(path));
+                MetaFile currentMFile = MetaFile.getMetaFileUntil(modname);
+                string metapath = Path.ChangeExtension(path, ".meta");//GetMetaPath(path);
+
+                PrepareUpdate(metapath, currentMFile);
+                if (modsToPatch!.Count == 1)
+                {
+                    CoreUtils.Print("METAFILE UP TO DATE skipping");
+                    return true;
+                }
+                ProcessPatchLines();
+                ExecuteNodes();
+
+                var duplicates = currentRE!.modData.GetRecords().GroupBy(r => r.StringId).Where(g => g.Count() > 1).ToList();
+
+                foreach (var group in duplicates)
+                {
+                    CoreUtils.Print($"DUPLICATE StringId: {group.Key}");
+
+                    foreach (var record in group)
+                        CoreUtils.Print($"  Type={record.RecordType}, Id={record.Id}, Name={record.Name}");
+                }
+
+
+
+
+                SaveUpdateResult(path, metapath, currentMFile);
+
+                return true;
             }
-        
+            catch (Exception ex)
+            {
+                HandlePatchError(ex);
+                return false;
+            }
+        }
+        private void SaveFreshResult(string path)
+        {
+            new MetaWriter().WriteMetaFile(Path.ChangeExtension(path, ".meta"), MetaFile.getMetaFileUntil(modname));
+
+            savePatchedMod(path);
+            ReverseEngineerRepository.Instance.ReloadMod(path);
+        }
+        private void SaveUpdateResult(string path,string metapath,MetaFile currentMFile)
+        {
+            if (CoreUtils.toggles["update_delta"])
+            {
+                string deltaPath = Path.Combine(Path.GetDirectoryName(path)!,Path.GetFileNameWithoutExtension(path) + "_delta.mod");
+                savePatchedMod(deltaPath);
+            }
+
+            if (existingPatch != null)
+            {
+                existingPatch.MergeReverseEngineer(currentRE!);
+                currentRE = existingPatch;
+            }
+
+            savePatchedMod(path);
+            MetaFile mergedMeta = MetaFile.Merge( metareader.mfile!, currentMFile);
+
+            new MetaWriter().WriteMetaFile(metapath, mergedMeta);
+
+            ReverseEngineerRepository.Instance.ReloadMod(path);
+        }
+        private bool PrepareUpdate(string metapath, MetaFile currentMFile)
+        {
+            if (!metareader.Read(metapath) || metareader.mfile == null)
+                return true;
+
+            modsToPatch = MetaFile.GetModsToBePatched(metareader.mfile,currentMFile);
+            existingPatch = ReverseEngineerRepository.Instance.LoadMod(Path.ChangeExtension(metapath, ".mod"));
+            currentRE!.modData.Header!.lastStringIdNr= existingPatch?.modData.Header?.lastStringIdNr ?? currentRE!.modData.Header!.lastStringIdNr;
+            return modsToPatch.Count != 1;
+        }
+        private void PreparePatch(string path)
+        {
+            Reset();
+
+            loadUnPatchedMod(path);
+
+            string dir = Path.GetDirectoryName(path)!;
+            string modName = Path.GetFileNameWithoutExtension(path);
+
+            modname = modName + ".mod";
+
+            string patchPath = Path.Combine(dir, modName + ".patch");
+
+            linesToProcess = new Queue<string>( File.ReadAllLines(patchPath));
+
+            CoreUtils.StartLog(modName, dir);
+        }
+        private void ExecuteNodes()
+        {
+            ProcessPatchLines();
+
+            foreach (PatcherNode node in nodes)
+                node.Execute();
         }
         private void ProcessPatchLines()
         {
@@ -254,7 +334,7 @@ namespace KenshiPatcher.PatchModel
 
             var (mode, recordType, condition, makeWhole) = ParseRecordDefinition(definition);
             List<ReverseEngineer> mods = ParseModSelector(modSelector, this.modname);
-            if (modsToPatch!= null && !ForceAllMods)
+            if (modsToPatch!= null && RestrictToPatchMods)
             {
                 mods = mods.Where(r => modsToPatch!.Contains(r.modname)).ToList();
             }
@@ -287,8 +367,13 @@ namespace KenshiPatcher.PatchModel
             foreach (var re in mods)
             {
                 string modName = re.modname;
-                foreach (var record in re.modData.GetRecordsByType(recordType))
+                foreach (var record in re.modData.GetRecordsByType(recordType)) { 
+                    //if (!ForceAllMods && existingPatch != null && existingPatch.modData.ContainsRecord(record.StringId))
+                    //{
+                    //    continue;
+                    //}
                     yield return (record, modName);
+                }
             }
         }
 

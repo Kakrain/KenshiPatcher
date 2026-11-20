@@ -1,50 +1,81 @@
-# Kenshi Patcher
+# KenshiPatcher
 
-A tool for safely patching and merging records in **Kenshi** mods.
+**A powerful, rule-based patching and merging tool for Kenshi mods.**
 
-Kenshi Patcher allows you to define patch rules to automatically filter and merge mod records, such as races, animations, and other game data, producing `.mod` files that can be safely loaded in-game.
+KenshiPatcher allows mod authors to create flexible patch definitions that automatically inspect, filter, modify, and merge records from installed Kenshi mods.
+
+Instead of manually creating compatibility patches for every possible combination of mods, you can define reusable rules in `.patch` files and let KenshiPatcher generate the resulting `.mod` files.
+
+Whether you're handling races, animations, game data, or complex record conflicts, KenshiPatcher gives you the tools to automate the process.
 
 ---
 
-## 📌 Features
+## ✨ Features
 
-- Filter records based on flexible conditions (e.g., field existence, emptiness).
-- Automatically merge conflicting records across multiple mods, preferring records from specified sources.
-- Supports `.mod` files for **v16** and **v17** of the game.
-- Generates patch files with correct dependencies and references.
-- Works with both humanoid and animal records, ensuring animations are applied only where appropriate.
+### Record Processing
+- Inspect and filter records using flexible conditions.
+- Check whether fields exist, are empty, or contain specific values.
+- Traverse and manipulate nested record data.
+- Process records from multiple installed mods.
+
+### Patch Language
+KenshiPatcher includes its own flexible `.patch` scripting language.
+
+- Variables and definitions.
+- Functions and custom procedures.
+- Lambda expressions.
+- Conditional execution.
+- Loops and iteration.
+- Array manipulation.
+- String and regular expression operations.
+- Bitwise operations.
+- Custom functions for working with Kenshi records.
+
+### Record Manipulation
+- Modify existing records and their fields.
+- Merge conflicting records from different mods.
+- Inspect and manipulate ExtraData.
+- Work with arrays and nested structures.
+- Apply conditional modifications based on record contents.
+
+### Compatibility & Safety
+- Supports Kenshi `.mod` file formats **v15, v16 and v17**.
+- Generates patches with the required dependencies and references.
+- Works with any kind of record.
+- Leaves original mods and game files untouched.
 
 ---
 
 ## ⚙️ Requirements
 
-- **Windows 64-bit**
-- **Microsoft Visual C++ 2015-2022 Redistributable (x64)**
+- Windows 64-bit.
+- Microsoft Visual C++ 2015–2022 Redistributable (x64).
 
-No additional frameworks required — just run the executable.
-
----
-
-## 🚀 Installation & Usage
-
-1. Clone or download the repository.  
-2. Open the solution in Visual Studio and build 'KenshiPatcher.exe', or download from the Releases page if available.  
-3. Prepare a patch definition file ('.patch') using the patcher syntax, e.g.:
-
-allraces:=(all)(A:RACE|!field_is_empty_or_not_exist("attachment points"))
-
-4. Run the patcher:
-5. Find your patch and click on Patch it!
-6. Enjoy 
+No additional frameworks are required. Simply run the executable.
 
 ---
 
-## 🛠 License
+## 🚀 Installation
 
-MIT License — see the [LICENSE](LICENSE) file for details.
+1. Download the latest release from [GitHub Releases](../../releases).
+2. Extract the downloaded archive.
+3. Install the Microsoft Visual C++ Redistributable if you don't already have it.
+4. Run `KenshiPatcher.exe`.
+
+Alternatively, clone the repository and build the solution using Visual Studio.
 
 ---
 
-## 📂 Notes
+## 📝 Usage
 
-This tool is designed for modders who want to safely merge and patch records across multiple Kenshi mods. Future updates may include expanded filtering capabilities and more advanced record management features.
+KenshiPatcher uses `.patch` files to define how records should be processed.
+
+### 1. Create a patch definition
+
+Create a `.patch` file containing your patch rules.
+
+For example:
+
+```text
+allraces:=(all)(A:RACE|true)
+allraces->SetField("swim speed",100)

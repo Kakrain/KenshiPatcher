@@ -33,6 +33,33 @@ namespace KenshiPatcher.Meta
             CoreUtils.Print($"Warning: No {modname} found while generating Metafile");
             return result;
         }
+        public static MetaFile Merge(MetaFile oldMFile, MetaFile newMFile)
+        {
+            MetaFile result = new MetaFile();
+
+            string patchName = newMFile.metas[^1].name;
+
+            var oldByName = oldMFile.metas.ToDictionary(x => x.name);
+
+            var newByName = newMFile.metas.ToDictionary(x => x.name);
+
+            foreach (MetaInfo newInfo in newMFile.metas)
+            {
+                if (newInfo.name == patchName)
+                    continue;
+
+                if (!oldByName.ContainsKey(newInfo.name))
+                {
+                    result.AddMetaInfo(newInfo);
+                }
+                else
+                {
+                    result.AddMetaInfo(newInfo);
+                }
+            }
+            return result;
+
+        }
         public static List<string> GetModsToBePatched(MetaFile oldMFile, MetaFile newMFile)
         {//last mod is the patch itself
             List<string> result = new();

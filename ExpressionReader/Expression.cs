@@ -4,21 +4,15 @@ using KenshiCore.UI;
 using KenshiCore.Utilities;
 using KenshiPatcher.Forms;
 using KenshiPatcher.PatchModel;
+using System;
 using System.Data;
 using System.Diagnostics;
-using System.Linq;
-using System.Linq.Expressions;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.Threading.Tasks.Sources;
-using System.Windows.Forms;
-using System.Xml.Linq;
 using static ScintillaNET.Style;
 
 namespace KenshiPatcher.ExpressionReader
 {
-
     public static class ExpressionUtils
     {
         public static string ExpectString(Expression<object> expression, ModRecord? r = null, Dictionary<string, object?>? locals = null)
@@ -483,12 +477,16 @@ namespace KenshiPatcher.ExpressionReader
                         List<string> resultModNames=new();
                         List<ModRecord> resultRecords=new();
 
-                        for(int j = 0;j<sourcesB.Count(); j++)
+
+                        ProgressController.For(0, sourcesB.Count, j =>//for(int j = 0;j<sourcesB.Count(); j++)
                         {
                             bool found=false;
                             var lambdaExpr = args[2] as LambdaExpression;
-                            for(int i = 0; i < sourcesA.Count()&&!found; i++)
+                            ProgressController.For(0, sourcesA.Count, i =>
+                            //for(int i = 0; i < sourcesA.Count()&&!found; i++)
                             {
+                                if (found)
+                                    return;
                                 var lambda = (Func<object?[], object?>)lambdaExpr!.Evaluate(sourcesA[i], locals)!;
                                 var value = lambda(new object?[] { (new List<string> { modnamesB[j] },new List<ModRecord> { sourcesB[j] })});
                                 if ((bool)value!)
@@ -498,8 +496,8 @@ namespace KenshiPatcher.ExpressionReader
                                     resultModNames.Add(modnamesA[i]);
                                     found=true;
                                 }
-                            }
-                        }
+                            });
+                        });
                         return (T)(object)(new RecordGroupExpression((resultModNames, resultRecords)));
                     }
                 },
@@ -509,8 +507,7 @@ namespace KenshiPatcher.ExpressionReader
 
                         (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
                         string field=ExpressionUtils.ExpectString(args[1],r,locals);
-                        
-                        for(int i = 0;i < sources.Count(); i++)
+                        ProgressController.For(0, sources.Count, i =>//for(int i = 0;i < sources.Count(); i++)
                         {
                             string value=sources[i].GetFieldAsString(field)!;
                             if (!categories.Keys.Contains(value))
@@ -521,7 +518,7 @@ namespace KenshiPatcher.ExpressionReader
                             ((RecordGroupExpression)resultRecords!).group.Item1.Add(modnames[i]);
                             ((RecordGroupExpression)resultRecords!).group.Item2.Add(sources[i]);
 
-                        }
+                        });
                         return (T)(object)categories;
                     }
                 },
@@ -922,7 +919,7 @@ namespace KenshiPatcher.ExpressionReader
         public override object EvaluateTyped(ModRecord? r, Dictionary<string, object?>? locals = null)
         {
             object?[] values = new object?[elements.Count];
-            for (int i = 0; i < elements.Count; i++)
+            for (int i = 0; i < elements.Count; i++)// im not sure  if it should be progresable
                 values[i] = elements[i].Evaluate(r,locals);
             return values;
         }
@@ -1353,7 +1350,7 @@ namespace KenshiPatcher.ExpressionReader
         {
             StringBuilder sb = new();
             var (names, records) = group;
-            for (int i = 0; i < names.Count; i++)
+            for (int i = 0; i < names.Count; i++)//should it be progressable?
             {
                 sb.AppendLine($"{names[i]} => {records[i].ToString()}");
             }
@@ -1591,11 +1588,11 @@ namespace KenshiPatcher.ExpressionReader
                         }
                         if (leftRecords.Count != sources!.Count)
                             throw new Exception("One-to-one procedure requires left and right groups to be the same length");
-                        for (int i = 0; i < leftRecords.Count; i++)
+                        ProgressController.For(0, leftRecords.Count, i =>//for (int i = 0; i < leftRecords.Count; i++)
                         {
                             duoFunc(leftRecords[i], sources[i], arguments);
-                            progress.Report(i,$"running {procedureName} to record {i}");
-                        }
+                            progress.Report(i, $"running {procedureName} to record {i}");
+                        });
                     }
                     else
                     {
@@ -1684,15 +1681,12 @@ namespace KenshiPatcher.ExpressionReader
             return new Func<object?[], object?>(args =>
             {
                 if (args.Length != Parameters.Count)
-                    throw new Exception(
-                        $"Lambda expected {Parameters.Count} args");
+                    throw new Exception($"Lambda expected {Parameters.Count} args");
 
-                var lambdaLocals =
-                    locals != null
-                        ? new Dictionary<string, object?>(locals)
-                        : new Dictionary<string, object?>();
+                var lambdaLocals = locals != null
+                        ? new Dictionary<string, object?>(locals): new Dictionary<string, object?>();
 
-                for (int i = 0; i < Parameters.Count; i++)
+                for (int i = 0; i < Parameters.Count; i++)//should  it be progressable?
                     lambdaLocals[Parameters[i]] = args[i];
 
                 return Body.Evaluate(r, lambdaLocals);
@@ -1944,7 +1938,7 @@ namespace KenshiPatcher.ExpressionReader
                     Patcher.Instance.currentRE!.addDependencies(modnames.Where(m => !string.Equals(m, Patcher.Instance.currentRE!.modname, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToList());
                 }
             },
-                { "ExpandExtraDataByField", (node) =>
+               { "ExpandExtraDataByField", (node) =>
                 {
                     List<Expression<object>> args = node.global!.GetArgs();
                     (List<string> modnames,List<ModRecord> sources) =ExpressionUtils.ExpectGroupRecord(args[0]);
@@ -1987,9 +1981,9 @@ namespace KenshiPatcher.ExpressionReader
 
                         var skeletons = skeletonToExtras.Keys.ToList();
 
-                        for (int i = 0; i < skeletons.Count; i++)
+                        ProgressController.For(0, skeletons.Count, i =>//for (int i = 0; i < skeletons.Count; i++)
                         {
-                            for (int j = i + 1; j < skeletons.Count; j++)
+                            ProgressController.For(i+1, skeletons.Count, j =>//for (int j = i + 1; j < skeletons.Count; j++)
                             {
                                 var extrasA = skeletonToExtras[skeletons[i]];
                                 var extrasB = skeletonToExtras[skeletons[j]];
@@ -1997,7 +1991,7 @@ namespace KenshiPatcher.ExpressionReader
                                 bool overlap = extrasA.Keys.Any(extrasB.ContainsKey);
 
                                 if (!overlap)
-                                    continue;
+                                    return;// was continue;
 
                                 int beforeA = extrasA.Count;
                                 int beforeB = extrasB.Count;
@@ -2013,8 +2007,8 @@ namespace KenshiPatcher.ExpressionReader
                                 {
                                     changed = true;
                                 }
-                            }
-                        }
+                            });
+                        });
 
                     } while (changed);
 
@@ -2043,10 +2037,10 @@ namespace KenshiPatcher.ExpressionReader
                     string field = ExpressionUtils.ExpectString(args[1]);
                     int start = ExpressionUtils.ExpectInt(args[2]);
                     int step = args.Count >= 4 ? ExpressionUtils.ExpectInt(args[3]) : 1;
-                    for (int i = 0; i < records.Count; i++)
+                    ProgressController.For(0, records.Count, i =>
                     {
                         records[i].SetField(field,""+(start + i * step));
-                    }
+                    });
                 }
             },
         };
